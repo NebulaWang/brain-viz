@@ -1,0 +1,1770 @@
+
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { 
+  Settings, 
+  Search, 
+  Brain, 
+  Upload,
+  Eye,
+  EyeOff,
+  Share2,
+  Grid3X3,
+  Circle,
+  Palette,
+  Layers,
+  Camera,
+  Navigation,
+  X,
+  ChevronDown,
+  ArrowLeftRight,
+  FileJson,
+  MousePointer2,
+  Activity,
+  Zap,
+  TrendingUp,
+  Skull,
+  GitCompare,
+  Box,
+  Target,
+  Plus,
+  GitCommit,
+  Grid,
+  Focus
+} from 'lucide-react';
+
+// --- Components ---
+
+const Card = ({ children, className = "" }) => (
+  <div className={`bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-slate-200 dark:border-slate-800 ${className}`}>
+    {children}
+  </div>
+);
+
+// --- Algorithms ---
+
+const calculateGraphMetrics = (nodes, links) => {
+  if (nodes.length === 0) return { efficiency: 0, clustering: 0, density: 0 };
+
+  const adj = new Map();
+  nodes.forEach(n => adj.set(n.id, []));
+  links.forEach(l => {
+    if (adj.has(l.source) && adj.has(l.target)) {
+      adj.get(l.source).push(l.target);
+      adj.get(l.target).push(l.source);
+    }
+  });
+
+  let totalEfficiency = 0;
+  const sampleNodes = nodes.length > 100 ? nodes.filter((_, i) => i % 2 === 0) : nodes; 
+
+  sampleNodes.forEach(startNode => {
+    const distances = new Map();
+    const queue = [startNode.id];
+    distances.set(startNode.id, 0);
+    
+    let head = 0;
+    while(head < queue.length) {
+      const u = queue[head++];
+      const d = distances.get(u);
+      
+      const neighbors = adj.get(u) || [];
+      for(const v of neighbors) {
+        if(!distances.has(v)) {
+          distances.set(v, d + 1);
+          queue.push(v);
+          totalEfficiency += 1 / (d + 1);
+        }
+      }
+    }
+  });
+  
+  const n = sampleNodes.length;
+  const efficiency = totalEfficiency / (n * (nodes.length - 1) || 1); 
+
+  let totalClustering = 0;
+  nodes.forEach(node => {
+    const neighbors = adj.get(node.id) || [];
+    const k = neighbors.length;
+    if (k < 2) return;
+    
+    let triangles = 0;
+    for(let i=0; i<k; i++) {
+      for(let j=i+1; j<k; j++) {
+        const n1 = neighbors[i];
+        const n2 = neighbors[j];
+        if (adj.get(n1)?.includes(n2)) triangles++;
+      }
+    }
+    totalClustering += (2 * triangles) / (k * (k - 1));
+  });
+  const clustering = totalClustering / nodes.length;
+
+  const possibleLinks = (nodes.length * (nodes.length - 1)) / 2;
+  const density = links.length / (possibleLinks || 1);
+
+  return { efficiency, clustering, density };
+};
+
+const calculateHubRoles = (nodes, links, nodeDegrees) => {
+  const roles = new Map(); 
+  
+  nodes.forEach(node => {
+    const degree = nodeDegrees.get(node.id) || 0;
+    if (degree === 0) {
+      roles.set(node.id, 'non-hub');
+      return;
+    }
+
+    const neighborLinks = links.filter(l => l.source === node.id || l.target === node.id);
+    const communityDegrees = new Map();
+    
+    neighborLinks.forEach(l => {
+      const neighborId = l.source === node.id ? l.target : l.source;
+      const neighbor = nodes.find(n => n.id === neighborId);
+      if (neighbor) {
+        const c = neighbor.group; 
+        communityDegrees.set(c, (communityDegrees.get(c) || 0) + 1);
+      }
+    });
+
+    let sumSq = 0;
+    communityDegrees.forEach(k_is => {
+      sumSq += Math.pow(k_is / degree, 2);
+    });
+    
+    const P = 1 - sumSq;
+    
+    if (degree > 5 && P > 0.3) roles.set(node.id, 'connector'); 
+    else if (degree > 5) roles.set(node.id, 'provincial'); 
+    else roles.set(node.id, 'non-hub');
+  });
+
+  return roles;
+};
+
+// Dijkstra
+const findShortestPath = (nodes, links, startId, endId) => {
+  const distances = new Map();
+  const previous = new Map();
+  const queue = new Set(nodes.map(n => n.id));
+  
+  nodes.forEach(n => distances.set(n.id, Infinity));
+  distances.set(startId, 0);
+  
+  while (queue.size > 0) {
+    let u = null;
+    let minDist = Infinity;
+    for (const id of queue) {
+      const d = distances.get(id);
+      if (d < minDist) { minDist = d; u = id; }
+    }
+    
+    if (u === null || u === endId) break;
+    queue.delete(u);
+    
+    const neighbors = links.filter(l => l.source === u || l.target === u);
+    for (const link of neighbors) {
+      const v = link.source === u ? link.target : link.source;
+      if (!queue.has(v)) continue;
+      
+      const weight = link.value || 0.001;
+      const alt = distances.get(u) + (1 / weight); 
+      
+      if (alt < distances.get(v)) {
+        distances.set(v, alt);
+        previous.set(v, { id: u, linkId: link });
+      }
+    }
+  }
+  
+  const path = [];
+  let curr = endId;
+  if (previous.has(curr) || curr === startId) {
+    while (curr) {
+      path.unshift(curr);
+      const prev = previous.get(curr);
+      curr = prev ? prev.id : null;
+    }
+  }
+  return path.length > 1 ? path : [];
+};
+
+// --- Helper: Generate Distinct Colors ---
+const generateColorMap = (nodes) => {
+  const groups = [...new Set(nodes.map(n => n.group))].sort((a,b) => a-b);
+  const colorMap = new Map();
+  
+  // Scientifically derived high-contrast palette for maximum visual distinction
+  const distinctColors = [
+    '#e6194B', '#3cb44b', '#ffe119', '#4363d8', '#f58231', 
+    '#911eb4', '#42d4f4', '#f032e6', '#bfef45', '#fabed4', 
+    '#469990', '#dcbeff', '#9A6324', '#fffac8', '#800000', 
+    '#aaffc3', '#808000', '#ffd8b1', '#000075', '#a9a9a9'
+  ];
+  
+  groups.forEach((group, i) => {
+    if (i < distinctColors.length) {
+      colorMap.set(group, distinctColors[i]);
+    } else {
+      const hue = (i * 137.508) % 360; 
+      const sat = 60 + (i % 3) * 15; 
+      const lit = 40 + (i % 4) * 10; 
+      colorMap.set(group, `hsl(${hue}, ${sat}%, ${lit}%)`);
+    }
+  });
+  
+  return colorMap;
+};
+
+// --- Connectivity Matrix Component ---
+
+const ConnectivityMatrixModal = ({ nodes, links, onClose, colorMap, deltaMode }) => {
+  const canvasRef = useRef(null);
+  const [hoverInfo, setHoverInfo] = useState(null);
+  const [showLabels, setShowLabels] = useState(true);
+
+  const sortedNodes = useMemo(() => {
+    return [...nodes].sort((a, b) => a.group - b.group || a.id.localeCompare(b.id));
+  }, [nodes]);
+
+  const linkMap = useMemo(() => {
+    const map = new Map();
+    links.forEach(l => {
+      const sId = typeof l.source === 'object' ? l.source.id : l.source;
+      const tId = typeof l.target === 'object' ? l.target.id : l.target;
+      map.set(`${sId}-${tId}`, l.value);
+      map.set(`${tId}-${sId}`, l.value); 
+    });
+    return map;
+  }, [links]);
+
+  const maxVal = useMemo(() => {
+    let max = 0.001;
+    links.forEach(l => { if (Math.abs(l.value) > max) max = Math.abs(l.value); });
+    return max;
+  }, [links]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const fullSize = canvas.width;
+    const n = sortedNodes.length;
+    
+    ctx.clearRect(0, 0, fullSize, fullSize);
+    
+    if (n === 0) {
+       ctx.fillStyle = "#94a3b8";
+       ctx.font = "14px sans-serif";
+       ctx.textAlign = "center";
+       ctx.fillText("No nodes visible", fullSize/2, fullSize/2);
+       return;
+    }
+
+    const stripThickness = 12; 
+    const labelSpace = showLabels ? 90 : stripThickness + 2; 
+    const matrixSize = fullSize - labelSpace;
+    const cellSize = matrixSize / n;
+
+    // 1. Draw Heatmap Cells
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        const u = sortedNodes[i].id;
+        const v = sortedNodes[j].id;
+        const val = linkMap.get(`${u}-${v}`) || 0;
+
+        if (u === v) {
+            ctx.fillStyle = '#cbd5e1'; 
+        } else if (val === 0) {
+            ctx.fillStyle = '#ffffff'; 
+        } else {
+            const intensity = Math.min(1, Math.abs(val) / maxVal);
+            if (deltaMode) {
+               ctx.fillStyle = val > 0 ? `rgba(16, 185, 129, ${intensity})` : `rgba(239, 68, 68, ${intensity})`;
+            } else {
+               ctx.fillStyle = `rgba(0, 0, 0, ${intensity})`; 
+            }
+        }
+        ctx.fillRect(labelSpace + j * cellSize, labelSpace + i * cellSize, cellSize + 0.5, cellSize + 0.5);
+      }
+    }
+
+    // 2. Draw Group Color Axis Strips
+    for (let i = 0; i < n; i++) {
+       ctx.fillStyle = colorMap.get(sortedNodes[i].group) || '#000';
+       ctx.fillRect(labelSpace + i * cellSize, labelSpace - stripThickness, cellSize + 0.5, stripThickness); 
+       ctx.fillRect(labelSpace - stripThickness, labelSpace + i * cellSize, stripThickness, cellSize + 0.5); 
+    }
+
+    // 3. Draw Grid Lines for Group boundaries
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)'; 
+    ctx.lineWidth = 1.0; 
+    let currentGroup = sortedNodes[0]?.group;
+    for (let i = 1; i < n; i++) {
+       if (sortedNodes[i].group !== currentGroup) {
+           currentGroup = sortedNodes[i].group;
+           const pos = labelSpace + i * cellSize;
+           ctx.beginPath(); ctx.moveTo(labelSpace, pos); ctx.lineTo(fullSize, pos); ctx.stroke();
+           ctx.beginPath(); ctx.moveTo(pos, labelSpace); ctx.lineTo(pos, fullSize); ctx.stroke();
+       }
+    }
+
+    // 4. Draw Node Labels
+    if (showLabels && cellSize >= 4) {
+      ctx.fillStyle = "#475569"; 
+      ctx.font = `${Math.min(11, cellSize - 1)}px sans-serif`;
+      ctx.textBaseline = "middle";
+      
+      for (let i = 0; i < n; i++) {
+         const node = sortedNodes[i];
+         
+         ctx.textAlign = "right";
+         ctx.fillText(node.id, labelSpace - stripThickness - 4, labelSpace + i * cellSize + cellSize / 2);
+         
+         ctx.save();
+         ctx.translate(labelSpace + i * cellSize + cellSize / 2, labelSpace - stripThickness - 4);
+         ctx.rotate(-Math.PI / 2);
+         ctx.textAlign = "left";
+         ctx.fillText(node.id, 0, 0);
+         ctx.restore();
+      }
+    }
+
+  }, [sortedNodes, linkMap, maxVal, deltaMode, colorMap, showLabels]);
+
+  const handleMouseMove = (e) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
+    
+    const n = sortedNodes.length;
+    if (n === 0) return;
+    
+    const stripThickness = 12;
+    const labelSpace = showLabels ? 90 : stripThickness + 2;
+    const matrixSize = canvas.width - labelSpace;
+    const cellSize = matrixSize / n;
+
+    const col = Math.floor((x - labelSpace) / cellSize);
+    const row = Math.floor((y - labelSpace) / cellSize);
+
+    if (row >= 0 && row < n && col >= 0 && col < n && x >= labelSpace && y >= labelSpace) {
+       const u = sortedNodes[row];
+       const v = sortedNodes[col];
+       const val = linkMap.get(`${u.id}-${v.id}`) || 0;
+       setHoverInfo({ x: e.clientX, y: e.clientY, u, v, val, isDiagonal: u.id === v.id });
+    } else {
+       setHoverInfo(null);
+    }
+  };
+
+  return (
+     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+        <div className="bg-white dark:bg-slate-900 rounded-xl shadow-2xl flex flex-col w-full max-w-3xl">
+           <div className="flex justify-between items-center p-4 border-b border-slate-200 dark:border-slate-800">
+              <div>
+                <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100">Connectivity Matrix</h2>
+                <p className="text-xs text-slate-500">Showing {nodes.length} currently visible regions</p>
+              </div>
+              <div className="flex items-center space-x-4">
+                 <label className="flex items-center space-x-2 cursor-pointer bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors">
+                    <input 
+                      type="checkbox" 
+                      className="rounded text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 cursor-pointer" 
+                      checked={showLabels} 
+                      onChange={(e) => setShowLabels(e.target.checked)} 
+                    />
+                    <span className="text-xs font-bold text-slate-600 dark:text-slate-300 select-none">Labels</span>
+                 </label>
+                 <button onClick={onClose} className="text-slate-400 hover:text-slate-600 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 p-2 rounded-full transition-colors"><X className="w-4 h-4"/></button>
+              </div>
+           </div>
+           <div className="p-6 flex justify-center items-center relative bg-slate-50 dark:bg-slate-950 rounded-b-xl overflow-hidden">
+              <canvas
+                 ref={canvasRef}
+                 width={800}
+                 height={800}
+                 className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-sm rounded"
+                 onMouseMove={handleMouseMove}
+                 onMouseLeave={() => setHoverInfo(null)}
+                 style={{ cursor: 'crosshair', width: '100%', height: 'auto', aspectRatio: '1/1', maxWidth: '80vh' }}
+              />
+              {hoverInfo && (
+                 <div className="fixed z-50 bg-slate-900 text-white text-xs p-3 rounded-lg shadow-xl pointer-events-none border border-slate-700 w-48" style={{ left: hoverInfo.x + 15, top: hoverInfo.y + 15 }}>
+                    <div className="mb-1 pb-1 border-b border-slate-700">
+                       <span className="text-slate-400">Row:</span> <span className="font-bold">{hoverInfo.u.id}</span>
+                       <div className="text-[10px] text-slate-500">{hoverInfo.u.community}</div>
+                    </div>
+                    <div className="mb-2 pb-1 border-b border-slate-700">
+                       <span className="text-slate-400">Col:</span> <span className="font-bold">{hoverInfo.v.id}</span>
+                       <div className="text-[10px] text-slate-500">{hoverInfo.v.community}</div>
+                    </div>
+                    <div className="flex justify-between items-center">
+                       <span className="text-slate-400">Weight:</span>
+                       <span className={`font-mono font-bold ${hoverInfo.isDiagonal ? 'text-slate-500' : (deltaMode ? (hoverInfo.val > 0 ? 'text-emerald-400' : hoverInfo.val < 0 ? 'text-rose-400' : 'text-slate-300') : 'text-indigo-400')}`}>
+                          {hoverInfo.isDiagonal ? 'Self' : (hoverInfo.val === 0 ? '0' : hoverInfo.val.toFixed(4))}
+                       </span>
+                    </div>
+                 </div>
+              )}
+           </div>
+        </div>
+     </div>
+  );
+};
+
+// --- Canvas Component ---
+
+const CanvasGraph = ({ 
+  nodes, 
+  links, 
+  activeNode, 
+  onNodeClick, 
+  onNodeRightClick,
+  searchTerm, 
+  layout,
+  colorMap,
+  nodeDegrees,
+  is3D,
+  pathData, 
+  takeSnapshot,
+  analysisSettings, 
+  nodeRoles,
+  nodeScale = 1 
+}) => {
+  const canvasRef = useRef(null);
+  const containerRef = useRef(null);
+  const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
+  const [hoveredNode, setHoveredNode] = useState(null);
+  const [hoverPos, setHoverPos] = useState({ x: 0, y: 0 });
+  
+  const nodePositions = useRef(new Map()); 
+  
+  const simulationRef = useRef({
+    nodes: [],
+    links: [],
+    camera: { x: 0, y: 0, zoom: 1, angleX: 0, angleY: 0 }, 
+    isDragging: false,
+    dragNode: null,
+    animationId: null,
+    lastMouse: { x: 0, y: 0 },
+    groupAngleMap: new Map()
+  });
+
+  // Snapshot
+  useEffect(() => {
+    if (takeSnapshot) {
+      takeSnapshot.current = () => {
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const link = document.createElement('a');
+          link.download = `brain-viz-export.png`;
+          link.href = canvas.toDataURL('image/png');
+          link.click();
+        }
+      };
+    }
+  }, [takeSnapshot]);
+
+  const recenterCamera = () => {
+    simulationRef.current.camera = { x: 0, y: 0, zoom: 1, angleX: 0, angleY: 0 };
+  };
+
+  // Init Data
+  useEffect(() => {
+    const width = dimensions.width;
+    const height = dimensions.height;
+    
+    if (simulationRef.current.nodes.length > 0) {
+      simulationRef.current.nodes.forEach(n => {
+        nodePositions.current.set(n.id, { 
+          x: n.x, y: n.y, z: n.z || 0, 
+          vx: n.vx, vy: n.vy, vz: n.vz || 0 
+        });
+      });
+    }
+
+    const uniqueGroupsArray = [...new Set(nodes.map(n => n.group))].sort((a,b) => a-b);
+    const groupAngleMap = new Map();
+    uniqueGroupsArray.forEach((g, i) => {
+        groupAngleMap.set(g, (2 * Math.PI * i) / uniqueGroupsArray.length);
+    });
+    simulationRef.current.groupAngleMap = groupAngleMap;
+
+    const applyLayout = (node, index, total) => {
+      const cached = nodePositions.current.get(node.id);
+      if (cached) return { x: cached.x, y: cached.y, z: cached.z };
+
+      if (layout === 'force') {
+        const angle = (2 * Math.PI * index) / total;
+        const radius = Math.min(width, height) * 0.4;
+        return {
+          x: width / 2 + radius * Math.cos(angle),
+          y: height / 2 + radius * Math.sin(angle),
+          z: (Math.random() - 0.5) * 50
+        };
+      }
+      if (layout === 'cluster') {
+         const angle = groupAngleMap.get(node.group) || 0;
+         const cx = width/2 + (width * 0.38) * Math.cos(angle);
+         const cy = height/2 + (height * 0.38) * Math.sin(angle);
+         return {
+             x: cx + (Math.random() - 0.5) * 40,
+             y: cy + (Math.random() - 0.5) * 40,
+             z: 0
+         };
+      }
+      if (layout === 'circular') {
+        const angle = (2 * Math.PI * index) / total;
+        const radius = Math.min(width, height) * 0.35;
+        return {
+          x: width / 2 + radius * Math.cos(angle),
+          y: height / 2 + radius * Math.sin(angle),
+          z: 0
+        };
+      }
+      if (layout === 'grid') {
+        const cols = Math.ceil(Math.sqrt(total));
+        const cellW = (width * 0.8) / cols;
+        const col = index % cols;
+        const row = Math.floor(index / cols);
+        return {
+          x: (width * 0.1) + col * cellW + cellW / 2,
+          y: (height * 0.1) + row * (width * 0.8) / cols + cellW / 2,
+          z: 0
+        };
+      }
+      return { x: width/2, y: height/2, z: 0 };
+    };
+
+    const simNodes = nodes.map((n, i) => {
+      const pos = applyLayout(n, i, nodes.length);
+      return { ...n, x: pos.x, y: pos.y, z: pos.z, vx: 0, vy: 0, vz: 0 };
+    });
+
+    const nodeMap = new Map(simNodes.map(n => [n.id, n]));
+
+    const simLinks = links
+      .map(l => ({
+        ...l,
+        sourceObj: nodeMap.get(l.source),
+        targetObj: nodeMap.get(l.target)
+      }))
+      .filter(l => l.sourceObj && l.targetObj);
+
+    simulationRef.current.nodes = simNodes;
+    simulationRef.current.links = simLinks;
+    
+  }, [nodes, links, dimensions, layout]); 
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    
+    const resizeObserver = new ResizeObserver(entries => {
+      for (let entry of entries) {
+        setDimensions({
+          width: entry.contentRect.width,
+          height: entry.contentRect.height
+        });
+      }
+    });
+    
+    resizeObserver.observe(container);
+    return () => resizeObserver.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    const sim = simulationRef.current;
+    
+    const maxVelocity = 10; 
+    const repulsion = is3D ? 1500 : 1000;
+    const springLen = 150;
+    
+    let iterations = 0;
+    const maxIterations = 500;
+
+    const tick = () => {
+      const { width, height } = dimensions;
+      const { camera } = sim;
+      
+      // A. Physics
+      if ((layout === 'force' || layout === 'cluster') && (iterations < maxIterations || sim.isDragging || is3D)) {
+        sim.nodes.forEach(n => { n.fx = 0; n.fy = 0; n.fz = 0; });
+
+        for (let i = 0; i < sim.nodes.length; i++) {
+          const n1 = sim.nodes[i];
+          for (let j = i + 1; j < sim.nodes.length; j++) {
+            const n2 = sim.nodes[j];
+            const dx = n1.x - n2.x;
+            const dy = n1.y - n2.y;
+            const dz = is3D ? (n1.z - n2.z) : 0;
+            const distSq = dx*dx + dy*dy + dz*dz || 1;
+            if (distSq > 60000) continue; 
+
+            let repStrength = repulsion;
+            if (layout === 'cluster') repStrength *= 1.5;
+
+            const force = repStrength / distSq;
+            const dist = Math.sqrt(distSq);
+            n1.fx += (dx/dist) * force;
+            n1.fy += (dy/dist) * force;
+            n1.fz += is3D ? (dz/dist) * force : 0;
+
+            n2.fx -= (dx/dist) * force;
+            n2.fy -= (dy/dist) * force;
+            n2.fz -= is3D ? (dz/dist) * force : 0;
+          }
+        }
+
+        sim.links.forEach(link => {
+          const s = link.sourceObj;
+          const t = link.targetObj;
+          const dx = t.x - s.x;
+          const dy = t.y - s.y;
+          const dz = is3D ? (t.z - s.z) : 0;
+          const dist = Math.sqrt(dx*dx + dy*dy + dz*dz) || 1;
+          
+          let factor = 0.04;
+          if (layout === 'cluster') {
+              if (s.group !== t.group) factor = 0.002; 
+              else factor = 0.08; 
+          }
+          
+          const force = (dist - springLen) * factor;
+
+          s.fx += (dx/dist) * force;
+          s.fy += (dy/dist) * force;
+          s.fz += is3D ? (dz/dist) * force : 0;
+
+          t.fx -= (dx/dist) * force;
+          t.fy -= (dy/dist) * force;
+          t.fz -= is3D ? (dz/dist) * force : 0;
+        });
+
+        // Dynamic Gravity
+        sim.nodes.forEach(n => {
+          if (n === sim.dragNode) return;
+
+          if (layout === 'cluster' && sim.groupAngleMap) {
+              const angle = sim.groupAngleMap.get(n.group);
+              if (angle !== undefined) {
+                  const cx = width/2 + (width * 0.38) * Math.cos(angle);
+                  const cy = height/2 + (height * 0.38) * Math.sin(angle);
+                  n.fx += (cx - n.x) * 0.10;
+                  n.fy += (cy - n.y) * 0.10;
+              }
+          } else {
+              n.fx += (width/2 - n.x) * 0.02;
+              n.fy += (height/2 - n.y) * 0.02;
+          }
+
+          if (is3D) n.fz += (0 - n.z) * 0.02;
+
+          if (!is3D) { n.z *= 0.9; n.vz *= 0.9; }
+
+          const padding = 40;
+          if (n.x < padding) n.fx += (padding - n.x) * 0.1;
+          if (n.x > width - padding) n.fx -= (n.x - (width - padding)) * 0.1;
+          if (n.y < padding) n.fy += (padding - n.y) * 0.1;
+          if (n.y > height - padding) n.fy -= (n.y - (height - padding)) * 0.1;
+
+          n.vx = (n.vx + n.fx) * 0.9;
+          n.vy = (n.vy + n.fy) * 0.9;
+          n.vz = (n.vz + (n.fz || 0)) * 0.9;
+
+          const vSq = n.vx*n.vx + n.vy*n.vy + n.vz*n.vz;
+          if (vSq > maxVelocity * maxVelocity) {
+            const scale = maxVelocity / Math.sqrt(vSq);
+            n.vx *= scale;
+            n.vy *= scale;
+            n.vz *= scale;
+          }
+
+          n.x += n.vx;
+          n.y += n.vy;
+          n.z += n.vz;
+        });
+        iterations++;
+      }
+
+      // B. Render
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = "#ffffff"; 
+      ctx.fillRect(0, 0, width, height); 
+      ctx.save();
+
+      const project = (x, y, z) => {
+        let px = x - width/2;
+        let py = y - height/2;
+        let pz = z;
+
+        if (is3D) {
+            const cosY = Math.cos(camera.angleY);
+            const sinY = Math.sin(camera.angleY);
+            const x1 = px * cosY - pz * sinY;
+            const z1 = px * sinY + pz * cosY;
+            px = x1; pz = z1;
+
+            const cosX = Math.cos(camera.angleX);
+            const sinX = Math.sin(camera.angleX);
+            const y2 = py * cosX - pz * sinX;
+            const z2 = py * sinX + pz * cosX;
+            py = y2; pz = z2;
+        }
+
+        px += camera.x;
+        py += camera.y;
+
+        const fov = 800;
+        const scale = (fov / (fov + pz)) * camera.zoom;
+        
+        return {
+          x: px * scale + width/2,
+          y: py * scale + height/2,
+          scale: scale,
+          depth: pz 
+        };
+      };
+
+      sim.nodes.forEach(n => {
+        n._proj = project(n.x, n.y, n.z);
+      });
+
+      const drawList = [];
+      
+      sim.links.forEach(l => {
+        const p1 = l.sourceObj._proj;
+        const p2 = l.targetObj._proj;
+        if (p1.scale < 0 || p2.scale < 0) return;
+        drawList.push({
+          type: 'link',
+          depth: (p1.depth + p2.depth) / 2,
+          p1, p2,
+          obj: l
+        });
+      });
+
+      sim.nodes.forEach(n => {
+        if (n._proj.scale < 0) return;
+        drawList.push({
+          type: 'node',
+          depth: n._proj.depth,
+          proj: n._proj,
+          obj: n
+        });
+      });
+
+      drawList.sort((a, b) => b.depth - a.depth);
+
+      const isPathLink = (l) => {
+        if (!pathData.path || pathData.path.length < 2) return false;
+        for (let i = 0; i < pathData.path.length - 1; i++) {
+          const u = pathData.path[i];
+          const v = pathData.path[i+1];
+          if ((l.source === u && l.target === v) || (l.source === v && l.target === u)) return true;
+        }
+        return false;
+      };
+      const isPathNode = (nId) => pathData.path && pathData.path.includes(nId);
+
+      const labelsToDraw = [];
+
+      drawList.forEach(item => {
+        if (item.type === 'link') {
+            const { p1, p2, obj: link } = item;
+            
+            let alpha = is3D ? 0.3 : 0.2; 
+            let width = 1 * ((p1.scale + p2.scale)/2); 
+            
+            const inPath = isPathLink(link);
+            const isConnected = activeNode && (link.sourceObj.id === activeNode.id || link.targetObj.id === activeNode.id);
+
+            if (analysisSettings.showRichClub) {
+               const srcDeg = nodeDegrees.get(link.sourceObj.id) || 0;
+               const tgtDeg = nodeDegrees.get(link.targetObj.id) || 0;
+               if (srcDeg <= 5 || tgtDeg <= 5) alpha = 0.02; 
+            }
+
+            if (inPath) {
+                alpha = 1;
+                width = 4 * ((p1.scale + p2.scale)/2);
+            } else if (pathData.path.length > 0) {
+                alpha = 0.02; 
+            } else if (activeNode) {
+               alpha = isConnected ? 0.8 : 0.02;
+               if (isConnected) width = 2 * ((p1.scale + p2.scale)/2);
+            } else if (searchTerm) {
+               const matches = link.sourceObj.id.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                               link.targetObj.id.toLowerCase().includes(searchTerm.toLowerCase());
+               alpha = matches ? 0.6 : 0.05;
+            }
+
+            let strokeStyle = null;
+            if (analysisSettings.deltaMode && !inPath) {
+                if (link.value > 0.001) strokeStyle = "#10b981"; 
+                else if (link.value < -0.001) strokeStyle = "#ef4444"; 
+                else alpha = 0.05; 
+            }
+
+            ctx.globalAlpha = Math.min(Math.max(alpha, 0), 1);
+            ctx.lineWidth = Math.max(0.5, width);
+            
+            if (!strokeStyle) {
+                const grad = ctx.createLinearGradient(p1.x, p1.y, p2.x, p2.y);
+                if (inPath) {
+                    grad.addColorStop(0, '#f59e0b');
+                    grad.addColorStop(1, '#f59e0b');
+                } else {
+                    grad.addColorStop(0, colorMap.get(link.sourceObj.group) || '#94a3b8');
+                    grad.addColorStop(1, colorMap.get(link.targetObj.group) || '#94a3b8');
+                }
+                strokeStyle = grad;
+            }
+            ctx.strokeStyle = strokeStyle;
+
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.stroke();
+
+        } else if (item.type === 'node') {
+            const { proj, obj: node } = item;
+            
+            const inPath = isPathNode(node.id);
+            const isStart = node.id === pathData.start;
+            const isEnd = node.id === pathData.end;
+            const isSelected = activeNode && activeNode.id === node.id;
+            const isMatch = searchTerm && node.id.toLowerCase().includes(searchTerm.toLowerCase());
+            const isNeighbor = activeNode && sim.links.some(l => 
+                (l.sourceObj.id === activeNode.id && l.targetObj.id === node.id) || 
+                (l.sourceObj.id === node.id && l.targetObj.id === activeNode.id)
+            );
+
+            let alpha = 1;
+            const degree = nodeDegrees.get(node.id) || 0;
+            let radius = (3 + Math.min(degree * 0.25, 8)) * proj.scale * nodeScale;
+            
+            if (analysisSettings.showRichClub && degree <= 5) {
+                alpha = 0.1;
+                radius = 2 * proj.scale * nodeScale;
+            }
+
+            if (isSelected || isMatch || isStart || isEnd) radius = Math.max(radius, 8 * proj.scale * nodeScale);
+            
+            let color = colorMap.get(node.group) || '#6366f1';
+            
+            if (pathData.path.length > 0) {
+               alpha = inPath ? 1 : 0.1;
+               if (isStart) color = '#10b981'; 
+               if (isEnd) color = '#ef4444'; 
+            } else if (searchTerm) {
+               alpha = isMatch ? 1 : 0.1;
+            } else if (activeNode) {
+               alpha = isSelected || isNeighbor ? 1 : 0.1;
+            }
+
+            const role = nodeRoles?.get(node.id);
+            if (analysisSettings.showHubs) {
+                if (role === 'connector') {
+                    ctx.globalAlpha = alpha;
+                    ctx.fillStyle = "#f59e0b"; 
+                    ctx.beginPath();
+                    ctx.moveTo(proj.x, proj.y - radius*1.5);
+                    ctx.lineTo(proj.x + radius*1.5, proj.y);
+                    ctx.lineTo(proj.x, proj.y + radius*1.5);
+                    ctx.lineTo(proj.x - radius*1.5, proj.y);
+                    ctx.closePath();
+                    ctx.fill();
+                    
+                    labelsToDraw.push({ node, proj, isSelected, inPath, isMatch, isNeighbor, radius: radius*1.5, role });
+                    return; 
+                } 
+            }
+
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(proj.x, proj.y, Math.max(0, radius), 0, 2 * Math.PI);
+            ctx.fill();
+            
+            if (isSelected || isStart || isEnd || (analysisSettings.showHubs && role === 'provincial')) {
+                ctx.strokeStyle = role === 'provincial' ? "#000" : "#fff";
+                ctx.lineWidth = (role === 'provincial' ? 1 : 2) * proj.scale;
+                ctx.stroke();
+                if (isSelected) {
+                    ctx.strokeStyle = "#000";
+                    ctx.lineWidth = 1 * proj.scale;
+                    ctx.stroke();
+                }
+            }
+
+            const showLabel = isSelected || isMatch || inPath || (proj.scale > 0.6 && (isNeighbor || (!activeNode && !searchTerm && pathData.path.length === 0 && !analysisSettings.showRichClub)));
+            if (showLabel) {
+                labelsToDraw.push({ node, proj, isSelected, inPath, isMatch, isNeighbor, radius, role });
+            }
+        }
+      });
+
+      // --- Smart Label Rendering (Anti-Collision & Sizing) ---
+      labelsToDraw.sort((a, b) => {
+          const scoreA = (a.isSelected ? 10000 : 0) + (a.isMatch ? 1000 : 0) + (a.inPath ? 100 : 0) + (a.isNeighbor ? 10 : 0) + a.proj.scale;
+          const scoreB = (b.isSelected ? 10000 : 0) + (b.isMatch ? 1000 : 0) + (b.inPath ? 100 : 0) + (b.isNeighbor ? 10 : 0) + b.proj.scale;
+          return scoreB - scoreA;
+      });
+
+      const drawnBoxes = [];
+      ctx.globalAlpha = 1;
+
+      labelsToDraw.forEach(label => {
+          const fontSize = Math.max(12, 16 * label.proj.scale); 
+          ctx.font = `${label.isSelected || label.inPath ? "bold " : ""}${fontSize}px sans-serif`;
+          
+          const textWidth = ctx.measureText(label.node.id).width;
+          const textHeight = fontSize; 
+          const lx = label.proj.x;
+          const ly = label.proj.y - label.radius - 6; 
+          
+          const padding = 2;
+          const box = {
+              l: lx - textWidth / 2 - padding,
+              r: lx + textWidth / 2 + padding,
+              t: ly - textHeight - padding,
+              b: ly + padding
+          };
+
+          let collision = false;
+          if (!label.isSelected && !label.isMatch && !label.inPath && !label.isNeighbor) {
+              for (const dBox of drawnBoxes) {
+                  if (!(box.r < dBox.l || box.l > dBox.r || box.b < dBox.t || box.t > dBox.b)) {
+                      collision = true;
+                      break;
+                  }
+              }
+          }
+
+          if (!collision) {
+              ctx.lineWidth = 3;
+              ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
+              ctx.strokeText(label.node.id, lx, ly);
+
+              ctx.fillStyle = label.isSelected || label.inPath ? "#000" : (is3D ? "#1e293b" : "#475569");
+              ctx.textAlign = "center";
+              ctx.fillText(label.node.id, lx, ly);
+              drawnBoxes.push(box);
+          }
+      });
+
+      ctx.restore();
+      sim.animationId = requestAnimationFrame(tick);
+    };
+
+    sim.animationId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(sim.animationId);
+  }, [dimensions, activeNode, searchTerm, nodes, layout, colorMap, nodeDegrees, is3D, pathData, analysisSettings, nodeRoles, nodeScale]); 
+
+  const handleWheel = (e) => {
+    e.preventDefault();
+    const sim = simulationRef.current;
+    const scaleAmount = -e.deltaY * 0.001;
+    sim.camera.zoom = Math.max(0.1, Math.min(6, sim.camera.zoom * (1 + scaleAmount)));
+  };
+
+  const handleMouseDown = (e) => {
+    const sim = simulationRef.current;
+    sim.isDragging = true;
+    sim.lastMouse = { x: e.clientX, y: e.clientY };
+    
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    let bestNode = null;
+    let maxDist = 20;
+
+    sim.nodes.forEach(n => {
+       if (!n._proj) return;
+       const dist = Math.sqrt((n._proj.x - mx)**2 + (n._proj.y - my)**2);
+       if (dist < maxDist) { bestNode = n; maxDist = dist; }
+    });
+
+    if (bestNode) {
+      if (e.button === 2) { 
+         onNodeRightClick && onNodeRightClick(nodes.find(n => n.id === bestNode.id));
+      } else {
+         sim.dragNode = bestNode; 
+         onNodeClick(nodes.find(n => n.id === bestNode.id));
+      }
+    } else {
+       sim.dragNode = null; 
+    }
+  };
+
+  const handleMouseMove = (e) => {
+    const sim = simulationRef.current;
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    setHoverPos({ x: mx, y: my });
+
+    if (!sim.isDragging) {
+        let bestNode = null;
+        let maxDist = 15;
+        sim.nodes.forEach(n => {
+          if (!n._proj) return;
+          const dist = Math.sqrt((n._proj.x - mx)**2 + (n._proj.y - my)**2);
+          if (dist < maxDist) { bestNode = n; maxDist = dist; }
+        });
+        setHoveredNode(bestNode ? nodes.find(n => n.id === bestNode.id) : null);
+        return;
+    }
+
+    const dx = e.clientX - sim.lastMouse.x;
+    const dy = e.clientY - sim.lastMouse.y;
+    sim.lastMouse = { x: e.clientX, y: e.clientY };
+
+    if (sim.dragNode && !is3D) {
+        sim.dragNode.x += dx / sim.camera.zoom;
+        sim.dragNode.y += dy / sim.camera.zoom;
+        sim.dragNode.vx = 0; sim.dragNode.vy = 0;
+    } else {
+        if (is3D) {
+            sim.camera.angleY += dx * 0.01; 
+            sim.camera.angleX += dy * 0.01; 
+            sim.camera.angleX = Math.max(-Math.PI/2, Math.min(Math.PI/2, sim.camera.angleX));
+        } else {
+            sim.camera.x += dx / sim.camera.zoom;
+            sim.camera.y += dy / sim.camera.zoom;
+        }
+    }
+  };
+
+  const handleMouseUp = () => {
+    simulationRef.current.isDragging = false;
+    simulationRef.current.dragNode = null;
+  };
+
+  return (
+    <div ref={containerRef} className="w-full h-full bg-slate-50 dark:bg-slate-900 rounded-lg overflow-hidden relative group" onContextMenu={(e) => e.preventDefault()}>
+      <canvas
+        ref={canvasRef}
+        width={dimensions.width}
+        height={dimensions.height}
+        style={{ display: 'block', width: '100%', height: '100%' }}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={() => { handleMouseUp(); setHoveredNode(null); }}
+        onWheel={handleWheel}
+        className={`cursor-move ${is3D ? 'cursor-grab active:cursor-grabbing' : ''}`}
+      />
+      
+      {/* Absolute Header Controls */}
+      <div className="absolute top-4 left-4 z-10 flex flex-col gap-2">
+         <div className="flex items-center space-x-2">
+           <button 
+             onClick={recenterCamera}
+             className="p-1.5 bg-white/90 dark:bg-slate-800/90 text-slate-500 hover:text-indigo-600 rounded-md shadow-sm border border-slate-200 dark:border-slate-700 transition-colors"
+             title="Recenter Camera"
+           >
+             <Focus className="w-4 h-4" />
+           </button>
+           {is3D && <div className="px-3 py-1 bg-black/50 text-white text-xs rounded-full backdrop-blur-sm pointer-events-none">3D Mode</div>}
+           {analysisSettings.deltaMode && <div className="px-3 py-1 bg-emerald-600/90 text-white text-xs font-bold rounded-full backdrop-blur-sm shadow-lg animate-pulse">Delta View</div>}
+         </div>
+      </div>
+
+      <div className="absolute bottom-4 left-4 text-xs text-slate-400 bg-white/80 dark:bg-slate-800/80 p-2 rounded backdrop-blur-sm pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity">
+          {is3D ? "Drag to Rotate • Scroll to Zoom" : "Drag to Pan • Scroll to Zoom"}
+          {analysisSettings.lesionMode && <span className="block text-red-500 font-bold">Right-click node to Lesion</span>}
+      </div>
+
+      {hoveredNode && (
+        <div 
+          className="absolute z-50 pointer-events-none bg-slate-900/90 text-white text-xs px-2 py-1.5 rounded shadow-lg backdrop-blur-sm transform -translate-x-1/2 -translate-y-full"
+          style={{ left: hoverPos.x, top: hoverPos.y - 10 }}
+        >
+          <div className="font-bold">{hoveredNode.id}</div>
+          <div className="text-slate-300 text-[10px]">
+             {hoveredNode.community} (Group {hoveredNode.group}) • {nodeRoles?.get(hoveredNode.id) === 'connector' ? 'Connector Hub' : 'Region'}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default function App() {
+  // --- VERSION CONTROL STATE ---
+  const [versions, setVersions] = useState([]);
+  const [activeVersionId, setActiveVersionId] = useState(''); 
+  const fileInputRef = useRef(null);
+
+  // Initialize with Fetching Local Public Files (AnyNet JSONs)
+  useEffect(() => {
+    const loadDefaultData = async () => {
+      try {
+        // Attempt to fetch files directly from the /public folder
+        const [restRes, stimRes] = await Promise.all([
+          fetch('/brain_data_anynet_rest.json'),
+          fetch('/brain_data_anynet_stim.json')
+        ]);
+        
+        if (!restRes.ok || !stimRes.ok) throw new Error("Local files not found");
+        
+        const restData = await restRes.json();
+        const stimData = await stimRes.json();
+
+        setVersions([
+          { id: 'rest', name: 'AnyNet - Rest State', data: restData },
+          { id: 'stim', name: 'AnyNet - Stim State', data: stimData }
+        ]);
+        setActiveVersionId('rest');
+
+      } catch (err) {
+        console.log("Local JSON files not found. Using fallback mock for preview window.");
+        // Fallback mock (472 regions) to ensure the preview window works
+        const mockNodes = Array.from({ length: 472 }).map((_, i) => ({ 
+            id: `Region-${i}`, group: i % 10, community: `Group ${i % 10}` 
+        }));
+        const mockRestLinks = Array.from({ length: 1500 }).map((_, i) => ({ 
+            source: `Region-${i % 472}`, target: `Region-${(i + 3) % 472}`, value: Math.random() 
+        }));
+        const mockStimLinks = Array.from({ length: 1500 }).map((_, i) => ({ 
+            source: `Region-${i % 472}`, target: `Region-${(i + 5) % 472}`, value: Math.random() * 1.5 
+        }));
+
+        setVersions([
+          { id: 'rest', name: 'AnyNet - Rest (Mock Preview)', data: { nodes: mockNodes, links: mockRestLinks } },
+          { id: 'stim', name: 'AnyNet - Stim (Mock Preview)', data: { nodes: mockNodes, links: mockStimLinks } }
+        ]);
+        setActiveVersionId('rest');
+      }
+    };
+    
+    loadDefaultData();
+  }, []);
+
+  const [internalThreshold, setInternalThreshold] = useState(0.05); // Lowered defaults for AnyNet
+  const [crossThreshold, setCrossThreshold] = useState(0.05);
+  const [hideBelowThreshold, setHideBelowThreshold] = useState(true); 
+  const [nodeScale, setNodeScale] = useState(1.0); 
+  const [layout, setLayout] = useState('cluster'); 
+  const [is3D, setIs3D] = useState(false); 
+  const [showMatrix, setShowMatrix] = useState(false);
+  const [selectedNode, setSelectedNode] = useState(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [hiddenGroups, setHiddenGroups] = useState(new Set());
+  
+  const [mode, setMode] = useState('explore'); 
+  const [lesionedNodes, setLesionedNodes] = useState(new Set());
+  
+  // Delta Settings
+  const [deltaMode, setDeltaMode] = useState(false);
+  const [deltaBaseId, setDeltaBaseId] = useState('rest'); 
+  const [deltaTargetId, setDeltaTargetId] = useState('stim'); 
+  
+  const [showHubs, setShowHubs] = useState(false);
+  const [showRichClub, setShowRichClub] = useState(false);
+
+  const [pathStart, setPathStart] = useState(null);
+  const [pathEnd, setPathEnd] = useState(null);
+  const [path, setPath] = useState([]);
+  const [startSearch, setStartSearch] = useState("");
+  const [endSearch, setEndSearch] = useState("");
+
+  const snapshotRef = useRef(null);
+
+  // --- DYNAMIC GRAPH DATA COMPUTATION ---
+  const graphData = useMemo(() => {
+    if (deltaMode) {
+        const baseData = versions.find(v => v.id === deltaBaseId)?.data;
+        const targetData = versions.find(v => v.id === deltaTargetId)?.data;
+
+        if (baseData && targetData) {
+            const nodeMap = new Map();
+            baseData.nodes.forEach(n => nodeMap.set(n.id, { ...n }));
+            targetData.nodes.forEach(n => { if (!nodeMap.has(n.id)) nodeMap.set(n.id, { ...n }); });
+            const mergedNodes = Array.from(nodeMap.values());
+
+            const mapBase = new Map(baseData.links.map(l => [`${l.source}-${l.target}`, l.value]));
+            const links = [];
+            
+            const allLinks = new Set([
+                ...baseData.links.map(l => `${l.source}-${l.target}`), 
+                ...targetData.links.map(l => `${l.source}-${l.target}`)
+            ]);
+            
+            allLinks.forEach(key => {
+                const [s, t] = key.split('-');
+                const valBase = mapBase.get(key) || mapBase.get(`${t}-${s}`) || 0;
+                
+                const foundTarget = targetData.links.find(l => (l.source === s && l.target === t) || (l.source === t && l.target === s));
+                const valTarget = foundTarget ? foundTarget.value : 0;
+                
+                const diff = valTarget - valBase;
+                if (Math.abs(diff) > 0.001) {
+                    links.push({ source: s, target: t, value: diff });
+                }
+            });
+            return { nodes: mergedNodes, links };
+        }
+    }
+
+    return versions.find(v => v.id === activeVersionId)?.data || { nodes: [], links: [] };
+  }, [versions, activeVersionId, deltaMode, deltaBaseId, deltaTargetId]);
+
+  const activeLinks = useMemo(() => {
+      const nodeGroupMap = new Map(graphData.nodes.map(n => [n.id, n.group]));
+      return graphData.links.filter(l => {
+          const val = deltaMode ? Math.abs(l.value) : l.value;
+          const sGroup = nodeGroupMap.get(l.source);
+          const tGroup = nodeGroupMap.get(l.target);
+          if (sGroup === tGroup) return val >= internalThreshold;
+          return val >= crossThreshold;
+      });
+  }, [graphData.links, internalThreshold, crossThreshold, deltaMode, graphData.nodes]);
+
+  const nodeDegrees = useMemo(() => {
+    const degrees = new Map();
+    activeLinks.forEach(link => {
+       degrees.set(link.source, (degrees.get(link.source) || 0) + 1);
+       degrees.set(link.target, (degrees.get(link.target) || 0) + 1);
+    });
+    return degrees;
+  }, [activeLinks]);
+
+  const visibleNodes = useMemo(() => {
+    let baseNodes = graphData.nodes;
+    if (lesionedNodes.size > 0) baseNodes = baseNodes.filter(n => !lesionedNodes.has(n.id));
+    if (hiddenGroups.size > 0) baseNodes = baseNodes.filter(n => !hiddenGroups.has(n.group));
+    
+    // Strict filtering: Ensures nodes are only visible if they have active links connecting to OTHER visible nodes
+    if (hideBelowThreshold) {
+        const validNodeIds = new Set(baseNodes.map(n => n.id));
+        const connected = new Set();
+        activeLinks.forEach(l => { 
+            if (validNodeIds.has(l.source) && validNodeIds.has(l.target)) {
+                connected.add(l.source); 
+                connected.add(l.target); 
+            }
+        });
+        baseNodes = baseNodes.filter(n => connected.has(n.id));
+    }
+    
+    return baseNodes;
+  }, [graphData.nodes, activeLinks, hideBelowThreshold, hiddenGroups, lesionedNodes]);
+
+  const metrics = useMemo(() => {
+      if (mode !== 'analysis' && !lesionedNodes.size) return null;
+      return calculateGraphMetrics(visibleNodes, activeLinks);
+  }, [visibleNodes, activeLinks, mode, lesionedNodes]);
+
+  const nodeRoles = useMemo(() => {
+      if (!showHubs) return null;
+      return calculateHubRoles(visibleNodes, activeLinks, nodeDegrees);
+  }, [visibleNodes, activeLinks, nodeDegrees, showHubs]);
+
+  const colorMap = useMemo(() => generateColorMap(graphData.nodes), [graphData.nodes]);
+  
+  const uniqueCommunities = useMemo(() => {
+    const groups = new Map();
+    graphData.nodes.forEach(n => {
+       if (!groups.has(n.group)) groups.set(n.group, []);
+       groups.get(n.group).push(n);
+    });
+    const communities = [];
+    Array.from(groups.keys()).sort((a,b) => a - b).forEach(groupId => {
+      communities.push([groupId, `Group ${groupId}`]);
+    });
+    return communities;
+  }, [graphData.nodes]);
+
+  const toggleGroup = (groupId) => {
+    const allGroupIds = uniqueCommunities.map(c => c[0]);
+    
+    if (hiddenGroups.size === 0) {
+      const newHidden = new Set(allGroupIds.filter(id => id !== groupId));
+      setHiddenGroups(newHidden);
+    } else {
+      const newHidden = new Set(hiddenGroups);
+      if (newHidden.has(groupId)) newHidden.delete(groupId); 
+      else newHidden.add(groupId); 
+      
+      if (newHidden.size === allGroupIds.length) setHiddenGroups(new Set());
+      else setHiddenGroups(newHidden);
+    }
+  };
+
+  const handleNodeClick = (node) => {
+    if (mode === 'path') {
+      if (!pathStart) { setPathStart(node.id); setStartSearch(node.id); }
+      else if (!pathEnd) { setPathEnd(node.id); setEndSearch(node.id); }
+      else { setPathStart(node.id); setStartSearch(node.id); setPathEnd(null); setEndSearch(""); setPath([]); }
+    } else {
+      setSelectedNode(node);
+    }
+  };
+
+  const handleLesion = (node) => {
+      if (!analysisSettings.lesionMode) return;
+      const newLesions = new Set(lesionedNodes);
+      if (newLesions.has(node.id)) newLesions.delete(node.id);
+      else newLesions.add(node.id);
+      setLesionedNodes(newLesions);
+  };
+
+  useEffect(() => {
+    if (pathStart && pathEnd) {
+      const calculatedPath = findShortestPath(visibleNodes, activeLinks, pathStart, pathEnd);
+      setPath(calculatedPath);
+    } else {
+      setPath([]);
+    }
+  }, [pathStart, pathEnd, visibleNodes, activeLinks]);
+
+  const handleFileUpload = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const json = JSON.parse(e.target.result);
+        if (json.nodes && Array.isArray(json.nodes)) {
+          
+          const newVersionId = `v${Date.now()}`;
+          const newVersion = {
+              id: newVersionId,
+              name: file.name.replace('.json', ''),
+              data: { nodes: json.nodes, links: json.links || [] }
+          };
+
+          setVersions(prev => [...prev, newVersion]);
+          setActiveVersionId(newVersionId);
+          setDeltaMode(false);
+          
+          let initialThreshold = 0;
+          if (json.links && json.links.length > 2000) {
+             const values = json.links.map(l => l.value).sort((a,b) => b-a);
+             // AnyNet specific scaling - usually density is higher
+             if (values.length > 1000) initialThreshold = values[1000];
+          }
+          setInternalThreshold(initialThreshold);
+          setCrossThreshold(initialThreshold);
+          setSelectedNode(null);
+          setHiddenGroups(new Set());
+        } else { alert("Invalid JSON format."); }
+      } catch (err) { alert("Failed to parse JSON file."); }
+      if(fileInputRef.current) fileInputRef.current.value = "";
+    };
+    reader.readAsText(file);
+  };
+
+  const analysisSettings = { showHubs, showRichClub, deltaMode, lesionMode: mode === 'analysis' };
+
+  return (
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-sans flex flex-col">
+      
+      {/* Header */}
+      <header className="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 z-10 shrink-0">
+        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <div className="bg-indigo-600 p-2 rounded-lg">
+              <Brain className="text-white w-5 h-5" />
+            </div>
+            <div>
+              <h1 className="text-lg font-bold leading-tight">BrainNet <span className="text-slate-400 font-light">Ultra</span></h1>
+              <p className="text-[10px] text-slate-500 font-medium">VERSION CONTROL</p>
+            </div>
+          </div>
+          <div className="flex items-center space-x-4">
+             
+             {/* DYNAMIC VERSION MANAGER */}
+             <div className="flex items-center bg-slate-100 dark:bg-slate-700 p-1.5 rounded-lg border border-slate-200 dark:border-slate-600 shadow-sm">
+                <GitCommit className="w-4 h-4 text-slate-400 mr-2 ml-1" />
+                <select 
+                  value={activeVersionId} 
+                  onChange={(e) => { setActiveVersionId(e.target.value); setDeltaMode(false); }}
+                  className="bg-transparent text-sm font-bold text-indigo-600 dark:text-indigo-400 outline-none cursor-pointer max-w-[200px] truncate"
+                >
+                   {versions.map(v => (
+                      <option key={v.id} value={v.id} className="text-slate-900">{v.name}</option>
+                   ))}
+                </select>
+                <div className="w-px h-4 bg-slate-300 dark:bg-slate-500 mx-2"></div>
+                <button 
+                  onClick={() => fileInputRef.current?.click()} 
+                  className="px-2 py-1 text-xs font-bold text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors flex items-center"
+                  title="Upload New Version"
+                >
+                  <Plus className="w-3 h-3 mr-1" /> New
+                </button>
+                <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" accept=".json" />
+             </div>
+
+             <div className="bg-slate-100 dark:bg-slate-700 p-1 rounded-lg flex space-x-1 hidden sm:flex">
+                <button onClick={() => setIs3D(false)} className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${!is3D ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`} title="2D View"><Grid3X3 className="w-4 h-4" /></button>
+                <button onClick={() => setIs3D(true)} className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${is3D ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`} title="3D View"><Box className="w-4 h-4" /></button>
+             </div>
+
+             <div className="h-6 w-px bg-slate-200 dark:bg-slate-700 mx-2"></div>
+
+             <div className="relative hidden md:block w-64">
+                <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+                <input 
+                    list="header-search-nodes"
+                    type="text" 
+                    placeholder="Search regions..." 
+                    className="w-full bg-slate-100 dark:bg-slate-700 pl-9 pr-8 py-2 rounded-full text-sm outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                    value={searchTerm}
+                    onChange={(e) => {
+                        setSearchTerm(e.target.value);
+                        const match = visibleNodes.find(n => n.id === e.target.value);
+                        if (match) setSelectedNode(match);
+                    }}
+                />
+                {searchTerm && (
+                    <button onClick={() => { setSearchTerm(''); setSelectedNode(null); }} className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600">
+                        <X className="w-4 h-4" />
+                    </button>
+                )}
+                <datalist id="header-search-nodes">
+                    {visibleNodes.map(n => <option key={n.id} value={n.id} />)}
+                </datalist>
+             </div>
+
+             <button onClick={() => snapshotRef.current?.()} className="p-2 text-slate-500 hover:text-indigo-600" title="Take Snapshot"><Camera className="w-5 h-5" /></button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <div className="flex-grow flex flex-col lg:flex-row max-w-7xl mx-auto w-full p-4 gap-4 overflow-hidden h-[calc(100vh-64px)]">
+        
+        {/* Left Panel */}
+        <aside className="w-full lg:w-80 flex flex-col gap-4 overflow-hidden shrink-0 h-full">
+          
+          <Card className="p-2 shrink-0 flex justify-between bg-slate-100 dark:bg-slate-800">
+             {['explore', 'path', 'analysis'].map(m => (
+               <button 
+                 key={m}
+                 onClick={() => setMode(m)}
+                 className={`flex-1 py-2 text-xs font-bold rounded-md capitalize flex justify-center items-center ${mode === m ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}
+               >
+                 {m === 'explore' && <MousePointer2 className="w-3 h-3 mr-1" />}
+                 {m === 'path' && <Navigation className="w-3 h-3 mr-1" />}
+                 {m === 'analysis' && <Activity className="w-3 h-3 mr-1" />}
+                 {m}
+               </button>
+             ))}
+          </Card>
+
+          {/* MODE: ANALYSIS */}
+          {mode === 'analysis' && (
+            <Card className="p-5 shrink-0 bg-slate-50 border-slate-200 dark:bg-slate-800 dark:border-slate-700 overflow-y-auto">
+               <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center">
+                 <Activity className="w-3 h-3 mr-2" /> Network Analysis
+               </h2>
+               
+               {/* 1. Delta View */}
+               <div className="mb-4 pb-4 border-b border-slate-200 dark:border-slate-700">
+                 <label className="flex items-center justify-between cursor-pointer mb-2">
+                     <span className="text-xs font-bold flex items-center"><GitCompare className="w-3 h-3 mr-1"/> Compare Versions</span>
+                     <div className="relative inline-block w-8 h-4 align-middle select-none">
+                       <input type="checkbox" className="toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-4 appearance-none cursor-pointer" checked={deltaMode} onChange={(e) => setDeltaMode(e.target.checked)}/>
+                       <label className={`toggle-label block overflow-hidden h-4 rounded-full cursor-pointer ${deltaMode ? 'bg-indigo-600' : 'bg-slate-300'}`}></label>
+                     </div>
+                 </label>
+                 
+                 {deltaMode && (
+                   <div className="bg-slate-100 dark:bg-slate-700 p-2 rounded-lg text-xs space-y-2 mt-2">
+                     <div className="flex flex-col space-y-2">
+                        <div className="flex justify-between items-center">
+                           <span className="text-[10px] font-bold text-slate-400">TARGET</span>
+                           <select value={deltaTargetId} onChange={(e) => setDeltaTargetId(e.target.value)} className="bg-white dark:bg-slate-600 border border-slate-300 dark:border-slate-500 rounded px-2 py-1 w-32 truncate">
+                              {versions.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+                           </select>
+                        </div>
+                        <div className="flex justify-between items-center">
+                           <span className="text-[10px] font-bold text-slate-400">MINUS BASE</span>
+                           <select value={deltaBaseId} onChange={(e) => setDeltaBaseId(e.target.value)} className="bg-white dark:bg-slate-600 border border-slate-300 dark:border-slate-500 rounded px-2 py-1 w-32 truncate">
+                              {versions.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+                           </select>
+                        </div>
+                     </div>
+                     <div className="flex justify-between text-[10px] text-slate-500 px-1 pt-2 border-t border-slate-200 dark:border-slate-600">
+                        <span className="text-emerald-500 font-bold">● Strengthened</span>
+                        <span className="text-rose-500 font-bold">● Weakened</span>
+                     </div>
+                   </div>
+                 )}
+               </div>
+
+               {/* 2. Hubs & Rich Club */}
+               <div className="mb-4 pb-4 border-b border-slate-200 dark:border-slate-700 space-y-2">
+                 <label className="flex items-center space-x-2 cursor-pointer">
+                    <input type="checkbox" className="w-3 h-3 rounded" checked={showHubs} onChange={(e) => setShowHubs(e.target.checked)} />
+                    <span className="text-xs">Highlight Hubs (Part. Coeff)</span>
+                 </label>
+                 <label className="flex items-center space-x-2 cursor-pointer">
+                    <input type="checkbox" className="w-3 h-3 rounded" checked={showRichClub} onChange={(e) => setShowRichClub(e.target.checked)} />
+                    <span className="text-xs">Show Rich Club (Top 20%)</span>
+                 </label>
+               </div>
+
+               {/* 3. Lesion Mode */}
+               <div className="mb-4 pb-4 border-b border-slate-200 dark:border-slate-700">
+                 <div className="text-xs font-bold text-red-500 mb-2 flex items-center">
+                    <Skull className="w-3 h-3 mr-1" /> Virtual Lesion
+                 </div>
+                 <p className="text-[10px] text-slate-500 mb-2">Right-click nodes to remove them and simulate damage.</p>
+                 <div className="flex flex-wrap gap-1">
+                    {Array.from(lesionedNodes).map(id => (
+                      <span key={id} className="px-2 py-0.5 bg-red-100 text-red-600 text-[10px] rounded-full flex items-center">
+                        {id} <button onClick={() => { const s = new Set(lesionedNodes); s.delete(id); setLesionedNodes(s); }} className="ml-1 hover:text-red-800">×</button>
+                      </span>
+                    ))}
+                    {lesionedNodes.size === 0 && <span className="text-[10px] text-slate-400 italic">No lesions active</span>}
+                 </div>
+               </div>
+
+               {/* 4. Scorecard */}
+               <div>
+                 <div className="text-xs font-bold text-slate-500 mb-2">Network Scorecard</div>
+                 <div className="grid grid-cols-2 gap-2">
+                    <div className="bg-white p-2 rounded border border-slate-200">
+                       <div className="text-[10px] text-slate-400">Global Efficiency</div>
+                       <div className="font-mono text-indigo-600 text-sm">{metrics?.efficiency.toFixed(3) || '-'}</div>
+                    </div>
+                    <div className="bg-white p-2 rounded border border-slate-200">
+                       <div className="text-[10px] text-slate-400">Clustering</div>
+                       <div className="font-mono text-indigo-600 text-sm">{metrics?.clustering.toFixed(3) || '-'}</div>
+                    </div>
+                    <div className="bg-white p-2 rounded border border-slate-200">
+                       <div className="text-[10px] text-slate-400">Density</div>
+                       <div className="font-mono text-indigo-600 text-sm">{metrics?.density.toFixed(3) || '-'}</div>
+                    </div>
+                 </div>
+               </div>
+            </Card>
+          )}
+
+          {/* MODE: PATHFINDING */}
+          {mode === 'path' && (
+            <Card className="p-5 shrink-0 bg-indigo-50 border-indigo-100 dark:bg-slate-800 dark:border-slate-700">
+               <h2 className="text-xs font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider mb-2 flex items-center">
+                 <Navigation className="w-3 h-3 mr-2" /> Pathfinding
+               </h2>
+               <div className="space-y-3 text-sm">
+                 <div className="relative">
+                   <span className="text-xs text-slate-500 mb-1 block">Start Node</span>
+                   <input list="nodes-list" className="w-full p-2 text-sm border border-slate-300 rounded" placeholder="Start..." value={startSearch} onChange={(e) => { setStartSearch(e.target.value); const match = visibleNodes.find(n => n.id === e.target.value); if (match) setPathStart(match.id); }} />
+                 </div>
+                 <div className="relative">
+                   <span className="text-xs text-slate-500 mb-1 block">End Node</span>
+                   <input list="nodes-list" className="w-full p-2 text-sm border border-slate-300 rounded" placeholder="End..." value={endSearch} onChange={(e) => { setEndSearch(e.target.value); const match = visibleNodes.find(n => n.id === e.target.value); if (match) setPathEnd(match.id); }} />
+                 </div>
+                 <datalist id="nodes-list">{visibleNodes.map(n => <option key={n.id} value={n.id} />)}</datalist>
+                 {path.length > 0 && <div className="mt-2 text-xs text-green-600 font-bold text-center bg-green-50 p-2 rounded">Path Found: {path.length} hops</div>}
+               </div>
+            </Card>
+          )}
+
+          {/* STANDARD CONTROLS (Always visible in explore/path) */}
+          {mode !== 'analysis' && (
+            <Card className="p-5 shrink-0 max-h-[40vh] overflow-y-auto">
+              <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4 flex items-center">
+                <Settings className="w-3 h-3 mr-2" /> View Settings
+              </h2>
+              <div className="space-y-6">
+                <div>
+                  <label className="text-sm font-medium mb-2 block">Layout Style</label>
+                  <div className="grid grid-cols-4 gap-2 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg">
+                    {['force', 'grid', 'circular', 'cluster'].map(l => (
+                      <button key={l} onClick={() => setLayout(l)} className={`flex items-center justify-center p-2 rounded-md text-xs font-medium capitalize ${layout === l ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`} title={l}>
+                        {l === 'force' && <Share2 className="w-3 h-3" />}
+                        {l === 'grid' && <Grid3X3 className="w-3 h-3" />}
+                        {l === 'circular' && <Circle className="w-3 h-3" />}
+                        {l === 'cluster' && <Target className="w-3 h-3" />}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                
+                <div className="space-y-3 mt-4">
+                  <div>
+                    <div className="flex justify-between mb-1">
+                      <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Internal Links</label>
+                      <input 
+                        type="number" 
+                        min="0" max="1" step="0.001" 
+                        value={internalThreshold} 
+                        onChange={(e) => setInternalThreshold(Number(e.target.value))} 
+                        className="w-16 text-xs bg-indigo-100 text-indigo-700 px-1 py-0.5 rounded font-bold text-center outline-none focus:ring-2 focus:ring-indigo-400 transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
+                      />
+                    </div>
+                    <input type="range" min="0" max="1" step="0.001" value={internalThreshold} onChange={(e) => setInternalThreshold(Number(e.target.value))} className="w-full accent-indigo-600 h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer" />
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between mb-1">
+                      <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Cross-Community</label>
+                      <input 
+                        type="number" 
+                        min="0" max="1" step="0.001" 
+                        value={crossThreshold} 
+                        onChange={(e) => setCrossThreshold(Number(e.target.value))} 
+                        className="w-16 text-xs bg-rose-100 text-rose-700 px-1 py-0.5 rounded font-bold text-center outline-none focus:ring-2 focus:ring-rose-400 transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
+                      />
+                    </div>
+                    <input type="range" min="0" max="1" step="0.001" value={crossThreshold} onChange={(e) => setCrossThreshold(Number(e.target.value))} className="w-full accent-rose-500 h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer" />
+                  </div>
+                </div>
+
+                <div className="mt-4">
+                  <div className="flex justify-between mb-2">
+                      <label className="text-sm font-medium">Node Size</label>
+                      <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-bold">{nodeScale.toFixed(1)}x</span>
+                  </div>
+                  <input type="range" min="0.2" max="3" step="0.1" value={nodeScale} onChange={(e) => setNodeScale(Number(e.target.value))} className="w-full accent-indigo-600 h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer" />
+                </div>
+
+                <div className="mt-4">
+                  <label className="flex items-center space-x-3 cursor-pointer">
+                    <input type="checkbox" className="w-4 h-4 text-indigo-600 rounded" checked={hideBelowThreshold} onChange={(e) => setHideBelowThreshold(e.target.checked)} />
+                    <span className="text-sm text-slate-600">Hide Disconnected Nodes</span>
+                  </label>
+                </div>
+              </div>
+            </Card>
+          )}
+
+          <Card className="p-0 flex-grow flex flex-col min-h-0 overflow-hidden">
+             <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+               <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center">
+                 <Layers className="w-3 h-3 mr-2" /> Communities
+               </h2>
+               <div className="flex items-center space-x-2">
+                 {hiddenGroups.size > 0 ? (
+                   <button 
+                     onClick={() => setHiddenGroups(new Set())} 
+                     className="text-[10px] text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 font-bold bg-indigo-50 dark:bg-indigo-900/30 px-2 py-0.5 rounded transition-colors"
+                   >
+                     Show All
+                   </button>
+                 ) : (
+                   <span className="text-[10px] text-slate-400">{uniqueCommunities.length}</span>
+                 )}
+                 <button 
+                   onClick={() => setShowMatrix(true)}
+                   className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-400 hover:text-indigo-600 rounded transition-colors"
+                   title="View Connectivity Matrix"
+                 >
+                   <Grid className="w-3.5 h-3.5" />
+                 </button>
+               </div>
+            </div>
+            <div className="flex-grow overflow-y-auto p-4 space-y-1">
+               {uniqueCommunities.map(([groupId, name]) => (
+                 <button key={groupId} onClick={() => toggleGroup(groupId)} className={`w-full flex items-center justify-between p-2 rounded-lg text-sm transition-all ${hiddenGroups.has(groupId) ? 'opacity-40 bg-slate-100' : 'hover:bg-slate-50'}`}>
+                     <div className="flex items-center truncate">
+                        <div className="w-3 h-3 rounded-full mr-3 shadow-sm shrink-0" style={{ backgroundColor: colorMap.get(groupId) }} />
+                        <span className="truncate max-w-[140px]" title={name}>{name}</span>
+                     </div>
+                     {hiddenGroups.has(groupId) && <EyeOff className="w-3 h-3 text-slate-400" />}
+                 </button>
+               ))}
+            </div>
+          </Card>
+        </aside>
+
+        {/* Visualization */}
+        <div className="flex-grow flex flex-col h-full gap-4 relative">
+          <div className="flex-grow rounded-xl border border-slate-200 shadow-sm overflow-hidden bg-white relative">
+             <CanvasGraph 
+               nodes={visibleNodes} 
+               links={activeLinks}
+               activeNode={selectedNode}
+               onNodeClick={handleNodeClick}
+               onNodeRightClick={handleLesion}
+               searchTerm={searchTerm}
+               layout={layout}
+               colorMap={colorMap}
+               nodeDegrees={nodeDegrees}
+               is3D={is3D}
+               pathData={{ path, start: pathStart, end: pathEnd }}
+               takeSnapshot={snapshotRef}
+               analysisSettings={analysisSettings}
+               nodeRoles={nodeRoles}
+               nodeScale={nodeScale}
+             />
+          </div>
+
+          {/* Selection Details */}
+          {selectedNode && (
+             <div className="absolute bottom-4 right-4 w-72 bg-white/95 backdrop-blur shadow-xl rounded-xl border border-slate-200 p-4 z-50 animate-in slide-in-from-right-10 fade-in duration-200">
+                <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center space-x-2 truncate">
+                      <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: colorMap.get(selectedNode.group) }} />
+                      <h3 className="font-bold truncate">{selectedNode.id}</h3>
+                    </div>
+                    <button onClick={() => setSelectedNode(null)} className="text-slate-400 hover:text-slate-600">×</button>
+                </div>
+                
+                <div className="text-xs font-medium text-slate-500 mb-3 flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
+                   <div className="flex items-center truncate mr-2">
+                     <Palette className="w-3 h-3 mr-1 shrink-0" /> 
+                     <span className="truncate">{selectedNode.community}</span>
+                   </div>
+                   <span className="bg-slate-100 dark:bg-slate-800 text-slate-500 px-2 py-0.5 rounded text-[10px] font-bold shrink-0">
+                     Group {selectedNode.group}
+                   </span>
+                </div>
+
+                <div className="space-y-2 max-h-40 overflow-y-auto pr-1 custom-scrollbar">
+                  <div className="flex justify-between text-xs border-b border-slate-100 pb-1 mb-2">
+                    <span className="font-semibold text-slate-500">Connected Region</span>
+                    <span className="font-semibold text-slate-500">Delta / Weight</span>
+                  </div>
+                  {activeLinks.filter(l => l.source === selectedNode.id || l.target === selectedNode.id)
+                    .sort((a,b) => Math.abs(b.value) - Math.abs(a.value))
+                    .slice(0, 50).map(l => {
+                    const neighborId = l.source === selectedNode.id ? l.target : l.source;
+                    return (
+                      <div key={neighborId} className="flex justify-between text-xs py-0.5 hover:bg-slate-50 rounded cursor-pointer" onClick={() => setSelectedNode(graphData.nodes.find(n => n.id === neighborId))}>
+                        <span className="truncate w-40">{neighborId}</span>
+                        <span className={`font-mono font-semibold ${deltaMode ? (l.value > 0 ? 'text-emerald-500' : 'text-rose-500') : 'text-indigo-600'}`}>
+                          {deltaMode && l.value > 0 ? '+' : ''}{l.value.toFixed(3)}
+                        </span>
+                      </div>
+                    )
+                  })}
+                  {activeLinks.filter(l => l.source === selectedNode.id || l.target === selectedNode.id).length === 0 && <span className="text-xs text-slate-400">No visible connections</span>}
+                </div>
+             </div>
+          )}
+        </div>
+      </div>
+      
+      {/* Connectivity Matrix Modal */}
+      {showMatrix && (
+        <ConnectivityMatrixModal 
+           nodes={visibleNodes} 
+           links={activeLinks} 
+           colorMap={colorMap} 
+           deltaMode={deltaMode} 
+           onClose={() => setShowMatrix(false)} 
+        />
+      )}
+
+    </div>
+  );
+}
