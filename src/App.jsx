@@ -1114,8 +1114,8 @@ export default function App() {
       try {
         // Attempt to fetch files directly from the /public folder
         const [restRes, stimRes] = await Promise.all([
-          fetch('/brain_data_anynet_rest.json'),
-          fetch('/brain_data_anynet_stim.json')
+          fetch('brain_data_anynet_rest.json'),
+          fetch('brain_data_anynet_stim.json')
         ]);
         
         if (!restRes.ok || !stimRes.ok) throw new Error("Local files not found");
