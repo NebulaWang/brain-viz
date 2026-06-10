@@ -203,12 +203,20 @@ const generateColorMap = (nodes) => {
   ];
   
   groups.forEach((group, i) => {
-    if (i < distinctColors.length) {
-      colorMap.set(group, distinctColors[i]);
+    if (group === -1) {
+      colorMap.set(group, '#cbd5e1'); // Neutral gray for Community -1
+      return;
+    }
+    
+    // Adjust index if -1 is present so color 0 is correctly assigned to Community 0
+    const colorIdx = groups.includes(-1) ? i - 1 : i; 
+    
+    if (colorIdx >= 0 && colorIdx < distinctColors.length) {
+      colorMap.set(group, distinctColors[colorIdx]);
     } else {
-      const hue = (i * 137.508) % 360; 
-      const sat = 60 + (i % 3) * 15; 
-      const lit = 40 + (i % 4) * 10; 
+      const hue = (colorIdx * 137.508) % 360; 
+      const sat = 60 + (colorIdx % 3) * 15; 
+      const lit = 40 + (colorIdx % 4) * 10; 
       colorMap.set(group, `hsl(${hue}, ${sat}%, ${lit}%)`);
     }
   });
@@ -510,8 +518,8 @@ const CanvasGraph = ({
       }
       if (layout === 'cluster') {
          const angle = groupAngleMap.get(node.group) || 0;
-         const cx = width/2 + (width * 0.38) * Math.cos(angle);
-         const cy = height/2 + (height * 0.38) * Math.sin(angle);
+         const cx = width/2 + (width * 0.32) * Math.cos(angle);
+         const cy = height/2 + (height * 0.32) * Math.sin(angle);
          return {
              x: cx + (Math.random() - 0.5) * 40,
              y: cy + (Math.random() - 0.5) * 40,
@@ -655,8 +663,8 @@ const CanvasGraph = ({
           if (layout === 'cluster' && sim.groupAngleMap) {
               const angle = sim.groupAngleMap.get(n.group);
               if (angle !== undefined) {
-                  const cx = width/2 + (width * 0.38) * Math.cos(angle);
-                  const cy = height/2 + (height * 0.38) * Math.sin(angle);
+                  const cx = width/2 + (width * 0.32) * Math.cos(angle);
+                  const cy = height/2 + (height * 0.32) * Math.sin(angle);
                   n.fx += (cx - n.x) * 0.10;
                   n.fy += (cy - n.y) * 0.10;
               }
@@ -822,8 +830,17 @@ const CanvasGraph = ({
                     grad.addColorStop(0, '#f59e0b');
                     grad.addColorStop(1, '#f59e0b');
                 } else {
-                    grad.addColorStop(0, colorMap.get(link.sourceObj.group) || '#94a3b8');
-                    grad.addColorStop(1, colorMap.get(link.targetObj.group) || '#94a3b8');
+                    // Helper to turn extremely light community colors into black for edges to ensure visibility
+                    const getSafeEdgeColor = (hex) => {
+                        const lightColors = ['#ffe119', '#bfef45', '#fabed4', '#dcbeff', '#fffac8', '#aaffc3', '#ffd8b1'];
+                        return lightColors.includes(hex) ? '#000000' : hex;
+                    };
+                    
+                    const c1 = colorMap.get(link.sourceObj.group) || '#94a3b8';
+                    const c2 = colorMap.get(link.targetObj.group) || '#94a3b8';
+
+                    grad.addColorStop(0, getSafeEdgeColor(c1));
+                    grad.addColorStop(1, getSafeEdgeColor(c2));
                 }
                 strokeStyle = grad;
             }
@@ -1123,6 +1140,24 @@ export default function App() {
         const restData = await restRes.json();
         const stimData = await stimRes.json();
 
+        // --- INTERCEPT AND STRICT FORMATTING ---
+        // 1. Catches unassigned nodes and forces them to Group -1 / "Community -1"
+        // 2. Forces all valid nodes to strictly use "Community {index}" starting from 0
+        [restData.nodes, stimData.nodes].forEach(nodes => {
+           if (!nodes) return;
+           nodes.forEach(n => {
+              n.group = parseInt(n.group, 10); // Ensure strict integer
+              
+              if (n.community === 'Unknown' || n.group === -1 || (n.group === 0 && n.community === 'Unknown')) {
+                 n.group = -1;
+                 n.community = 'Community -1';
+              } else {
+                 n.community = `Community ${n.group}`;
+              }
+           });
+        });
+        // -------------------------------------
+
         setVersions([
           { id: 'rest', name: 'AnyNet - Rest State', data: restData },
           { id: 'stim', name: 'AnyNet - Stim State', data: stimData }
@@ -1133,7 +1168,7 @@ export default function App() {
         console.log("Local JSON files not found. Using fallback mock for preview window.");
         // Fallback mock (472 regions) to ensure the preview window works
         const mockNodes = Array.from({ length: 472 }).map((_, i) => ({ 
-            id: `Region-${i}`, group: i % 10, community: `Group ${i % 10}` 
+            id: `Region-${i}`, group: i % 10, community: `Community ${i % 10}` 
         }));
         const mockRestLinks = Array.from({ length: 1500 }).map((_, i) => ({ 
             source: `Region-${i % 472}`, target: `Region-${(i + 3) % 472}`, value: Math.random() 
@@ -1273,6 +1308,72 @@ export default function App() {
       return calculateHubRoles(visibleNodes, activeLinks, nodeDegrees);
   }, [visibleNodes, activeLinks, nodeDegrees, showHubs]);
 
+  const hubCommunity = useMemo(() => {
+    if (visibleNodes.length === 0 || activeLinks.length === 0) return null;
+
+    // Map for ultra-fast O(1) lookups
+    const nodeGroupMap = new Map(visibleNodes.map(n => [n.id, n.group]));
+    
+    const globalWeights = new Map();
+    const crossWeights = new Map();
+    const innerWeights = new Map();
+
+    activeLinks.forEach(link => {
+      const s = typeof link.source === 'object' ? link.source.id : link.source;
+      const t = typeof link.target === 'object' ? link.target.id : link.target;
+
+      const sGroup = nodeGroupMap.get(s);
+      const tGroup = nodeGroupMap.get(t);
+
+      // Only count edges where both ends are currently visible/selected
+      if (sGroup !== undefined && tGroup !== undefined) {
+          const val = Math.abs(link.value); // Use absolute value for Delta modes
+          
+          // 1. Overall / Global Strength
+          globalWeights.set(sGroup, (globalWeights.get(sGroup) || 0) + val);
+          globalWeights.set(tGroup, (globalWeights.get(tGroup) || 0) + val);
+
+          // 2. Cross vs Inner Strength
+          if (sGroup !== tGroup) {
+              crossWeights.set(sGroup, (crossWeights.get(sGroup) || 0) + val);
+              crossWeights.set(tGroup, (crossWeights.get(tGroup) || 0) + val);
+          } else {
+              innerWeights.set(sGroup, (innerWeights.get(sGroup) || 0) + (val * 2));
+          }
+      }
+    });
+
+    // Helper to find the maximum weight in a specific category map
+    const getWinner = (weightMap) => {
+        let maxWeight = -1;
+        let hubId = null;
+
+        weightMap.forEach((weight, groupId) => {
+          if (weight > maxWeight) {
+            maxWeight = weight;
+            hubId = groupId;
+          }
+        });
+
+        if (hubId === null) return null;
+        
+        const hubNode = visibleNodes.find(n => n.group === hubId);
+        const displayName = hubNode ? hubNode.community : `Community ${hubId}`;
+        
+        return {
+           id: hubId,
+           name: displayName,
+           weight: maxWeight
+        };
+    };
+
+    return {
+       globalHub: getWinner(globalWeights),
+       crossHub: getWinner(crossWeights),
+       innerHub: getWinner(innerWeights)
+    };
+  }, [visibleNodes, activeLinks]);
+
   const colorMap = useMemo(() => generateColorMap(graphData.nodes), [graphData.nodes]);
   
   const uniqueCommunities = useMemo(() => {
@@ -1283,7 +1384,8 @@ export default function App() {
     });
     const communities = [];
     Array.from(groups.keys()).sort((a,b) => a - b).forEach(groupId => {
-      communities.push([groupId, `Group ${groupId}`]);
+      const displayName = groups.get(groupId)[0].community || `Community ${groupId}`;
+      communities.push([groupId, displayName]);
     });
     return communities;
   }, [graphData.nodes]);
@@ -1340,6 +1442,19 @@ export default function App() {
         const json = JSON.parse(e.target.result);
         if (json.nodes && Array.isArray(json.nodes)) {
           
+          // --- INTERCEPT AND STRICT FORMATTING ---
+          json.nodes.forEach(n => {
+              n.group = parseInt(n.group, 10); // Ensure strict integer
+              
+              if (n.community === 'Unknown' || n.group === -1 || (n.group === 0 && n.community === 'Unknown')) {
+                 n.group = -1;
+                 n.community = 'Community -1';
+              } else {
+                 n.community = `Community ${n.group}`;
+              }
+          });
+          // -------------------------------------
+
           const newVersionId = `v${Date.now()}`;
           const newVersion = {
               id: newVersionId,
@@ -1370,6 +1485,39 @@ export default function App() {
 
   const analysisSettings = { showHubs, showRichClub, deltaMode, lesionMode: mode === 'analysis' };
 
+  // Smart State Switcher: Preserves viewing of specific brain regions across different community assignments
+  const handleVersionChange = (newVersionId) => {
+    if (hiddenGroups.size > 0 && graphData.nodes) {
+      // 1. Get the actual IDs of the brain regions currently visible
+      const currentVisibleNodeIds = new Set(
+        graphData.nodes
+          .filter(n => !hiddenGroups.has(n.group))
+          .map(n => n.id)
+      );
+
+      // 2. Find the nodes in the state we are switching to
+      const newVersionData = versions.find(v => v.id === newVersionId)?.data;
+      if (newVersionData && newVersionData.nodes) {
+        const newVisibleGroups = new Set();
+        
+        // 3. Find which groups in the new state contain our previously visible regions
+        newVersionData.nodes.forEach(n => {
+          if (currentVisibleNodeIds.has(n.id)) {
+            newVisibleGroups.add(n.group);
+          }
+        });
+
+        // 4. Update the hidden list to isolate these newly identified groups
+        const allNewGroups = new Set(newVersionData.nodes.map(n => n.group));
+        const newHidden = new Set([...allNewGroups].filter(g => !newVisibleGroups.has(g)));
+        setHiddenGroups(newHidden);
+      }
+    }
+    
+    setActiveVersionId(newVersionId);
+    setDeltaMode(false);
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-sans flex flex-col">
       
@@ -1392,7 +1540,7 @@ export default function App() {
                 <GitCommit className="w-4 h-4 text-slate-400 mr-2 ml-1" />
                 <select 
                   value={activeVersionId} 
-                  onChange={(e) => { setActiveVersionId(e.target.value); setDeltaMode(false); }}
+                  onChange={(e) => handleVersionChange(e.target.value)}
                   className="bg-transparent text-sm font-bold text-indigo-600 dark:text-indigo-400 outline-none cursor-pointer max-w-[200px] truncate"
                 >
                    {versions.map(v => (
@@ -1469,7 +1617,7 @@ export default function App() {
 
           {/* MODE: ANALYSIS */}
           {mode === 'analysis' && (
-            <Card className="p-5 shrink-0 bg-slate-50 border-slate-200 dark:bg-slate-800 dark:border-slate-700 overflow-y-auto">
+            <Card className="p-5 shrink-0 bg-slate-50 border-slate-200 dark:bg-slate-800 dark:border-slate-700 overflow-y-auto max-h-[45vh] custom-scrollbar">
                <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center">
                  <Activity className="w-3 h-3 mr-2" /> Network Analysis
                </h2>
@@ -1539,6 +1687,68 @@ export default function App() {
                {/* 4. Scorecard */}
                <div>
                  <div className="text-xs font-bold text-slate-500 mb-2">Network Scorecard</div>
+                 
+                 {/* New Hub Community Display */}
+                 {hubCommunity && (
+                    <div className="bg-white dark:bg-slate-900 p-3 rounded-lg border border-indigo-100 dark:border-indigo-900/50 mb-3 shadow-sm flex flex-col gap-2.5">
+                       <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider border-b border-slate-100 dark:border-slate-800 pb-1.5">Dominant Hub Communities</div>
+                       
+                       {/* Global Hub */}
+                       {hubCommunity.globalHub && (
+                          <div className="flex items-center justify-between">
+                             <div>
+                               <div className="text-[9px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">Overall Connections</div>
+                               <div className="flex items-center">
+                                  <div className="w-2.5 h-2.5 rounded-full mr-2 shadow-sm" style={{ backgroundColor: colorMap.get(hubCommunity.globalHub.id) }}></div>
+                                  <span className="font-bold text-xs text-slate-700 dark:text-slate-200 truncate max-w-[130px]" title={hubCommunity.globalHub.name}>
+                                     {hubCommunity.globalHub.name}
+                                  </span>
+                               </div>
+                             </div>
+                             <div className="font-mono text-indigo-600 dark:text-indigo-400 font-bold text-sm">
+                                {hubCommunity.globalHub.weight.toFixed(2)}
+                             </div>
+                          </div>
+                       )}
+
+                       {/* Cross Hub */}
+                       {hubCommunity.crossHub && (
+                          <div className="flex items-center justify-between">
+                             <div>
+                               <div className="text-[9px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">Cross-Community</div>
+                               <div className="flex items-center">
+                                  <div className="w-2.5 h-2.5 rounded-full mr-2 shadow-sm" style={{ backgroundColor: colorMap.get(hubCommunity.crossHub.id) }}></div>
+                                  <span className="font-bold text-xs text-slate-700 dark:text-slate-200 truncate max-w-[130px]" title={hubCommunity.crossHub.name}>
+                                     {hubCommunity.crossHub.name}
+                                  </span>
+                               </div>
+                             </div>
+                             <div className="font-mono text-emerald-600 dark:text-emerald-400 font-bold text-sm">
+                                {hubCommunity.crossHub.weight.toFixed(2)}
+                             </div>
+                          </div>
+                       )}
+
+                       {/* Inner Hub */}
+                       {hubCommunity.innerHub && (
+                          <div className="flex items-center justify-between">
+                             <div>
+                               <div className="text-[9px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">Inner-Community</div>
+                               <div className="flex items-center">
+                                  <div className="w-2.5 h-2.5 rounded-full mr-2 shadow-sm" style={{ backgroundColor: colorMap.get(hubCommunity.innerHub.id) }}></div>
+                                  <span className="font-bold text-xs text-slate-700 dark:text-slate-200 truncate max-w-[130px]" title={hubCommunity.innerHub.name}>
+                                     {hubCommunity.innerHub.name}
+                                  </span>
+                               </div>
+                             </div>
+                             <div className="font-mono text-amber-600 dark:text-amber-500 font-bold text-sm">
+                                {hubCommunity.innerHub.weight.toFixed(2)}
+                             </div>
+                          </div>
+                       )}
+                    </div>
+                 )}
+
                  <div className="grid grid-cols-2 gap-2">
                     <div className="bg-white p-2 rounded border border-slate-200">
                        <div className="text-[10px] text-slate-400">Global Efficiency</div>
