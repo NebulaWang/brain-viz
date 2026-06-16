@@ -1129,24 +1129,27 @@ export default function App() {
   useEffect(() => {
     const loadDefaultData = async () => {
       try {
-        // Attempt to fetch files directly from the /public folder
-        const [restRes, stimRes] = await Promise.all([
-          fetch('brain_data_anynet_rest.json'),
-          fetch('brain_data_anynet_stim.json'),
+        // Attempt to fetch all 4 files directly from the /public folder
+        const [restCorticalRes, restRes, stimCorticalRes, stimRes] = await Promise.all([
           fetch('brain_data_anynet_rest_cortical.json'),
-          fetch('brain_data_anynet_stim_cortical.json')
-
+          fetch('brain_data_anynet_rest.json'),
+          fetch('brain_data_anynet_stim_cortical.json'),
+          fetch('brain_data_anynet_stim.json')
         ]);
         
-        if (!restRes.ok || !stimRes.ok) throw new Error("Local files not found");
+        if (!restCorticalRes.ok || !restRes.ok || !stimCorticalRes.ok || !stimRes.ok) {
+           throw new Error("One or more local files not found");
+        }
         
+        const restCorticalData = await restCorticalRes.json();
         const restData = await restRes.json();
+        const stimCorticalData = await stimCorticalRes.json();
         const stimData = await stimRes.json();
 
         // --- INTERCEPT AND STRICT FORMATTING ---
         // 1. Catches unassigned nodes and forces them to Group -1 / "Community -1"
         // 2. Forces all valid nodes to strictly use "Community {index}" starting from 0
-        [restData.nodes, stimData.nodes].forEach(nodes => {
+        [restCorticalData.nodes, restData.nodes, stimCorticalData.nodes, stimData.nodes].forEach(nodes => {
            if (!nodes) return;
            nodes.forEach(n => {
               n.group = parseInt(n.group, 10); // Ensure strict integer
@@ -1162,10 +1165,12 @@ export default function App() {
         // -------------------------------------
 
         setVersions([
-          { id: 'rest', name: 'AnyNet - Rest State', data: restData },
-          { id: 'stim', name: 'AnyNet - Stim State', data: stimData }
+          { id: 'rest_cortical', name: 'AnyNet - Rest (Cortical Only)', data: restCorticalData },
+          { id: 'rest_full', name: 'AnyNet - Rest (Full)', data: restData },
+          { id: 'stim_cortical', name: 'AnyNet - Stim (Cortical Only)', data: stimCorticalData },
+          { id: 'stim_full', name: 'AnyNet - Stim (Full)', data: stimData }
         ]);
-        setActiveVersionId('rest');
+        setActiveVersionId('rest_cortical'); // Default view
 
       } catch (err) {
         console.log("Local JSON files not found. Using fallback mock for preview window.");
@@ -1181,10 +1186,12 @@ export default function App() {
         }));
 
         setVersions([
-          { id: 'rest', name: 'AnyNet - Rest (Mock Preview)', data: { nodes: mockNodes, links: mockRestLinks } },
-          { id: 'stim', name: 'AnyNet - Stim (Mock Preview)', data: { nodes: mockNodes, links: mockStimLinks } }
+          { id: 'rest_cortical', name: 'AnyNet - Rest (Cortical Mock)', data: { nodes: mockNodes, links: mockRestLinks } },
+          { id: 'rest_full', name: 'AnyNet - Rest (Full Mock)', data: { nodes: mockNodes, links: mockRestLinks } },
+          { id: 'stim_cortical', name: 'AnyNet - Stim (Cortical Mock)', data: { nodes: mockNodes, links: mockStimLinks } },
+          { id: 'stim_full', name: 'AnyNet - Stim (Full Mock)', data: { nodes: mockNodes, links: mockStimLinks } }
         ]);
-        setActiveVersionId('rest');
+        setActiveVersionId('rest_cortical');
       }
     };
     
