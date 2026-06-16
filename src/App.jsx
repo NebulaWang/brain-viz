@@ -1131,10 +1131,10 @@ export default function App() {
       try {
         // Attempt to fetch all 4 files directly from the /public folder
         const [restCorticalRes, restRes, stimCorticalRes, stimRes] = await Promise.all([
-          fetch('/brain_data_anynet_rest_cortical.json'),
-          fetch('/brain_data_anynet_rest.json'),
-          fetch('/brain_data_anynet_stim_cortical.json'),
-          fetch('/brain_data_anynet_stim.json')
+          fetch('brain_data_anynet_rest_cortical.json'),
+          fetch('brain_data_anynet_rest.json'),
+          fetch('brain_data_anynet_stim_cortical.json'),
+          fetch('brain_data_anynet_stim.json')
         ]);
         
         if (!restCorticalRes.ok || !restRes.ok || !stimCorticalRes.ok || !stimRes.ok) {
