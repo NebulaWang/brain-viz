@@ -789,7 +789,7 @@ const CanvasGraph = ({
             const { p1, p2, obj: link } = item;
             
             let alpha = is3D ? 0.3 : 0.2; 
-            let width = 1 * ((p1.scale + p2.scale)/2); 
+            let width = 1.5 * ((p1.scale + p2.scale)/2) * nodeScale; 
             
             const inPath = isPathLink(link);
             const isConnected = activeNode && (link.sourceObj.id === activeNode.id || link.targetObj.id === activeNode.id);
@@ -802,12 +802,12 @@ const CanvasGraph = ({
 
             if (inPath) {
                 alpha = 1;
-                width = 4 * ((p1.scale + p2.scale)/2);
+                width = 4 * ((p1.scale + p2.scale)/2) * nodeScale;
             } else if (pathData.path.length > 0) {
                 alpha = 0.02; 
             } else if (activeNode) {
                alpha = isConnected ? 0.8 : 0.02;
-               if (isConnected) width = 2 * ((p1.scale + p2.scale)/2);
+               if (isConnected) width = 2.5 * ((p1.scale + p2.scale)/2) * nodeScale;
             } else if (searchTerm) {
                const matches = link.sourceObj.id.toLowerCase().includes(searchTerm.toLowerCase()) || 
                                link.targetObj.id.toLowerCase().includes(searchTerm.toLowerCase());
@@ -1131,10 +1131,10 @@ export default function App() {
       try {
         // Attempt to fetch all 4 files directly from the /public folder
         const [restCorticalRes, restRes, stimCorticalRes, stimRes] = await Promise.all([
-          fetch('brain_data_anynet_rest_cortical.json'),
-          fetch('brain_data_anynet_rest.json'),
-          fetch('brain_data_anynet_stim_cortical.json'),
-          fetch('brain_data_anynet_stim.json')
+          fetch('/brain_data_anynet_rest_cortical.json'),
+          fetch('/brain_data_anynet_rest.json'),
+          fetch('/brain_data_anynet_stim_cortical.json'),
+          fetch('/brain_data_anynet_stim.json')
         ]);
         
         if (!restCorticalRes.ok || !restRes.ok || !stimCorticalRes.ok || !stimRes.ok) {
@@ -1178,11 +1178,11 @@ export default function App() {
         const mockNodes = Array.from({ length: 472 }).map((_, i) => ({ 
             id: `Region-${i}`, group: i % 10, community: `Community ${i % 10}` 
         }));
-        const mockRestLinks = Array.from({ length: 1500 }).map((_, i) => ({ 
-            source: `Region-${i % 472}`, target: `Region-${(i + 3) % 472}`, value: Math.random() 
+        const mockRestLinks = Array.from({ length: 472 }).map((_, i) => ({ 
+            source: `Region-${i}`, target: `Region-${(i + 3) % 472}`, value: Math.random() 
         }));
-        const mockStimLinks = Array.from({ length: 1500 }).map((_, i) => ({ 
-            source: `Region-${i % 472}`, target: `Region-${(i + 5) % 472}`, value: Math.random() * 1.5 
+        const mockStimLinks = Array.from({ length: 472 }).map((_, i) => ({ 
+            source: `Region-${i}`, target: `Region-${(i + 5) % 472}`, value: Math.random() * 1.5 
         }));
 
         setVersions([
@@ -1207,15 +1207,15 @@ export default function App() {
   const [showMatrix, setShowMatrix] = useState(false);
   const [selectedNode, setSelectedNode] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const [hiddenGroups, setHiddenGroups] = useState(new Set());
+  const [hiddenGroups, setHiddenGroups] = useState(new Set([-1])); // Hidden by default
   
   const [mode, setMode] = useState('explore'); 
   const [lesionedNodes, setLesionedNodes] = useState(new Set());
   
   // Delta Settings
   const [deltaMode, setDeltaMode] = useState(false);
-  const [deltaBaseId, setDeltaBaseId] = useState('rest'); 
-  const [deltaTargetId, setDeltaTargetId] = useState('stim'); 
+  const [deltaBaseId, setDeltaBaseId] = useState('rest_cortical'); 
+  const [deltaTargetId, setDeltaTargetId] = useState('stim_cortical'); 
   
   const [showHubs, setShowHubs] = useState(false);
   const [showRichClub, setShowRichClub] = useState(false);
@@ -1485,7 +1485,7 @@ export default function App() {
           setInternalThreshold(initialThreshold);
           setCrossThreshold(initialThreshold);
           setSelectedNode(null);
-          setHiddenGroups(new Set());
+          setHiddenGroups(new Set([-1])); // Hidden by default for new files
         } else { alert("Invalid JSON format."); }
       } catch (err) { alert("Failed to parse JSON file."); }
       if(fileInputRef.current) fileInputRef.current.value = "";
@@ -1520,6 +1520,10 @@ export default function App() {
         // 4. Update the hidden list to isolate these newly identified groups
         const allNewGroups = new Set(newVersionData.nodes.map(n => n.group));
         const newHidden = new Set([...allNewGroups].filter(g => !newVisibleGroups.has(g)));
+        
+        // Automatically hide Community -1 on state transition
+        newHidden.add(-1);
+        
         setHiddenGroups(newHidden);
       }
     }
@@ -1595,7 +1599,7 @@ export default function App() {
                     </button>
                 )}
                 <datalist id="header-search-nodes">
-                    {visibleNodes.map(n => <option key={n.id} value={n.id} />)}
+                    {visibleNodes.map((n, idx) => <option key={`${n.id}-${idx}`} value={n.id} />)}
                 </datalist>
              </div>
 
@@ -1792,7 +1796,7 @@ export default function App() {
                    <span className="text-xs text-slate-500 mb-1 block">End Node</span>
                    <input list="nodes-list" className="w-full p-2 text-sm border border-slate-300 rounded" placeholder="End..." value={endSearch} onChange={(e) => { setEndSearch(e.target.value); const match = visibleNodes.find(n => n.id === e.target.value); if (match) setPathEnd(match.id); }} />
                  </div>
-                 <datalist id="nodes-list">{visibleNodes.map(n => <option key={n.id} value={n.id} />)}</datalist>
+                 <datalist id="nodes-list">{visibleNodes.map((n, idx) => <option key={`${n.id}-${idx}`} value={n.id} />)}</datalist>
                  {path.length > 0 && <div className="mt-2 text-xs text-green-600 font-bold text-center bg-green-50 p-2 rounded">Path Found: {path.length} hops</div>}
                </div>
             </Card>
@@ -1956,10 +1960,10 @@ export default function App() {
                   </div>
                   {activeLinks.filter(l => l.source === selectedNode.id || l.target === selectedNode.id)
                     .sort((a,b) => Math.abs(b.value) - Math.abs(a.value))
-                    .slice(0, 50).map(l => {
+                    .slice(0, 50).map((l, idx) => {
                     const neighborId = l.source === selectedNode.id ? l.target : l.source;
                     return (
-                      <div key={neighborId} className="flex justify-between text-xs py-0.5 hover:bg-slate-50 rounded cursor-pointer" onClick={() => setSelectedNode(graphData.nodes.find(n => n.id === neighborId))}>
+                      <div key={`${neighborId}-${idx}`} className="flex justify-between text-xs py-0.5 hover:bg-slate-50 rounded cursor-pointer" onClick={() => setSelectedNode(graphData.nodes.find(n => n.id === neighborId))}>
                         <span className="truncate w-40">{neighborId}</span>
                         <span className={`font-mono font-semibold ${deltaMode ? (l.value > 0 ? 'text-emerald-500' : 'text-rose-500') : 'text-indigo-600'}`}>
                           {deltaMode && l.value > 0 ? '+' : ''}{l.value.toFixed(3)}
