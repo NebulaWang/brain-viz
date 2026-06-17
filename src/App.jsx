@@ -1351,6 +1351,7 @@ export default function App() {
   const [versions, setVersions] = useState([]);
   const [activeVersionId, setActiveVersionId] = useState(''); 
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [versionMenuOpen, setVersionMenuOpen] = useState(false); // NEW STATE for custom dropdown
   const fileInputRef = useRef(null);
 
   // Initialize with Fetching Local Public Files (AnyNet JSONs)
@@ -1760,6 +1761,9 @@ export default function App() {
     setDeltaMode(false);
   };
 
+  // Helper to get active version name
+  const activeVersionName = versions.find(v => v.id === activeVersionId)?.name || 'Select Version';
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-sans flex flex-col">
       
@@ -1778,17 +1782,41 @@ export default function App() {
           <div className="flex items-center space-x-4">
              
              {/* DYNAMIC VERSION MANAGER */}
-             <div className="flex items-center bg-slate-100 dark:bg-slate-700 p-1.5 rounded-lg border border-slate-200 dark:border-slate-600 shadow-sm">
+             <div className="flex items-center bg-slate-100 dark:bg-slate-700 p-1.5 rounded-lg border border-slate-200 dark:border-slate-600 shadow-sm relative">
                 <GitCommit className="w-4 h-4 text-slate-400 mr-2 ml-1" />
-                <select 
-                  value={activeVersionId} 
-                  onChange={(e) => handleVersionChange(e.target.value)}
-                  className="bg-transparent text-sm font-bold text-indigo-600 dark:text-indigo-400 outline-none cursor-pointer max-w-[200px] truncate"
-                >
-                   {versions.map(v => (
-                      <option key={v.id} value={v.id} className="text-slate-900">{v.name}</option>
-                   ))}
-                </select>
+                
+                {/* CUSTOM DROPDOWN INSTEAD OF NATIVE SELECT */}
+                <div className="relative" onMouseLeave={() => setVersionMenuOpen(false)}>
+                  <button 
+                    onClick={() => setVersionMenuOpen(!versionMenuOpen)}
+                    className="flex items-center bg-transparent text-sm font-bold text-indigo-600 dark:text-indigo-400 outline-none cursor-pointer w-48 text-left hover:text-indigo-800 dark:hover:text-indigo-300 transition-colors"
+                  >
+                    <span className="truncate flex-grow">{activeVersionName}</span>
+                    <ChevronDown className="w-3 h-3 ml-1 shrink-0" />
+                  </button>
+                  
+                  {versionMenuOpen && (
+                    <div className="absolute left-0 mt-3 w-56 bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 z-50 overflow-hidden text-sm py-1">
+                       {versions.map(v => (
+                          <button 
+                            key={v.id} 
+                            onClick={() => {
+                              handleVersionChange(v.id);
+                              setVersionMenuOpen(false);
+                            }}
+                            className={`w-full text-left px-4 py-2 text-sm font-medium transition-colors ${
+                              activeVersionId === v.id 
+                                ? 'bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400' 
+                                : 'hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200'
+                            }`}
+                          >
+                            {v.name}
+                          </button>
+                       ))}
+                    </div>
+                  )}
+                </div>
+
                 <div className="w-px h-4 bg-slate-300 dark:bg-slate-500 mx-2"></div>
                 <button 
                   onClick={() => fileInputRef.current?.click()} 
