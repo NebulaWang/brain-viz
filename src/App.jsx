@@ -466,17 +466,244 @@ const CanvasGraph = ({
   // Snapshot
   useEffect(() => {
     if (takeSnapshot) {
-      takeSnapshot.current = () => {
+      takeSnapshot.current = (format = 'png') => {
         const canvas = canvasRef.current;
-        if (canvas) {
-          const link = document.createElement('a');
-          link.download = `brain-viz-export.png`;
-          link.href = canvas.toDataURL('image/png');
-          link.click();
+        if (!canvas) return;
+
+        if (format === 'png' || format === 'jpeg') {
+            const link = document.createElement('a');
+            link.download = `brain-viz-export.${format}`;
+            link.href = canvas.toDataURL(`image/${format}`, 1.0);
+            link.click();
+        } else if (format === 'pdf') {
+            const dataUrl = canvas.toDataURL('image/jpeg', 1.0);
+            const printWindow = window.open('', '_blank');
+            printWindow.document.write(`
+              <html><head><title>Print to PDF</title></head>
+              <body style="margin:0;display:flex;justify-content:center;align-items:center;height:100vh;">
+                <img src="${dataUrl}" style="max-width:100%;max-height:100%;" onload="window.print();window.close();"/>
+              </body></html>
+            `);
+            printWindow.document.close();
+        } else if (format === 'svg') {
+            const width = dimensions.width;
+            const height = dimensions.height;
+            const sim = simulationRef.current;
+
+            const drawList = [];
+            sim.links.forEach(l => {
+              const p1 = l.sourceObj._proj;
+              const p2 = l.targetObj._proj;
+              if (p1 && p2 && p1.scale >= 0 && p2.scale >= 0) {
+                drawList.push({ type: 'link', depth: (p1.depth + p2.depth) / 2, p1, p2, obj: l });
+              }
+            });
+
+            sim.nodes.forEach(n => {
+              if (n._proj && n._proj.scale >= 0) {
+                drawList.push({ type: 'node', depth: n._proj.depth, proj: n._proj, obj: n });
+              }
+            });
+
+            drawList.sort((a, b) => b.depth - a.depth);
+
+            const isPathLink = (l) => {
+              if (!pathData.path || pathData.path.length < 2) return false;
+              for (let i = 0; i < pathData.path.length - 1; i++) {
+                const u = pathData.path[i];
+                const v = pathData.path[i+1];
+                if ((l.source === u && l.target === v) || (l.source === v && l.target === u)) return true;
+              }
+              return false;
+            };
+            const isPathNode = (nId) => pathData.path && pathData.path.includes(nId);
+            
+            const getSafeEdgeColor = (hex) => {
+                const lightColors = ['#ffe119', '#bfef45', '#fabed4', '#dcbeff', '#fffac8', '#aaffc3', '#ffd8b1'];
+                return lightColors.includes(hex) ? '#000000' : hex;
+            };
+
+            let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">\n`;
+            svg += `<rect width="100%" height="100%" fill="#ffffff" />\n`;
+            
+            svg += `<defs>\n`;
+            drawList.forEach((item, idx) => {
+                if (item.type === 'link') {
+                    const c1 = getSafeEdgeColor(colorMap.get(item.obj.sourceObj.group) || '#94a3b8');
+                    const c2 = getSafeEdgeColor(colorMap.get(item.obj.targetObj.group) || '#94a3b8');
+                    svg += `<linearGradient id="grad-${idx}" x1="${item.p1.x}" y1="${item.p1.y}" x2="${item.p2.x}" y2="${item.p2.y}" gradientUnits="userSpaceOnUse">
+                              <stop offset="0%" stop-color="${c1}" />
+                              <stop offset="100%" stop-color="${c2}" />
+                            </linearGradient>\n`;
+                }
+            });
+            svg += `</defs>\n`;
+
+            const labelsToDraw = [];
+            const ctx = canvas.getContext('2d'); 
+
+            drawList.forEach((item, idx) => {
+                if (item.type === 'link') {
+                    const { p1, p2, obj: link } = item;
+                    let alpha = is3D ? 0.3 : 0.2; 
+                    let lw = 1.5 * ((p1.scale + p2.scale)/2) * nodeScale; 
+                    
+                    const inPath = isPathLink(link);
+                    const isConnected = activeNode && (link.sourceObj.id === activeNode.id || link.targetObj.id === activeNode.id);
+
+                    if (analysisSettings.showRichClub) {
+                       const srcDeg = nodeDegrees.get(link.sourceObj.id) || 0;
+                       const tgtDeg = nodeDegrees.get(link.targetObj.id) || 0;
+                       if (srcDeg <= 5 || tgtDeg <= 5) alpha = 0.02; 
+                    }
+
+                    if (inPath) {
+                        alpha = 1;
+                        lw = 4 * ((p1.scale + p2.scale)/2) * nodeScale;
+                    } else if (pathData.path.length > 0) {
+                        alpha = 0.02; 
+                    } else if (activeNode) {
+                       alpha = isConnected ? 0.8 : 0.02;
+                       if (isConnected) lw = 2.5 * ((p1.scale + p2.scale)/2) * nodeScale;
+                    } else if (searchTerm) {
+                       const matches = link.sourceObj.id.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                                       link.targetObj.id.toLowerCase().includes(searchTerm.toLowerCase());
+                       alpha = matches ? 0.6 : 0.05;
+                    }
+
+                    let stroke = `url(#grad-${idx})`;
+                    if (analysisSettings.deltaMode && !inPath) {
+                        if (link.value > 0.001) stroke = "#10b981"; 
+                        else if (link.value < -0.001) stroke = "#ef4444"; 
+                        else alpha = 0.05; 
+                    } else if (inPath) {
+                        stroke = '#f59e0b';
+                    }
+
+                    alpha = Math.min(Math.max(alpha, 0), 1);
+                    lw = Math.max(0.5, lw);
+
+                    svg += `<line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="${stroke}" stroke-width="${lw}" opacity="${alpha}" />\n`;
+
+                } else if (item.type === 'node') {
+                    const { proj, obj: node } = item;
+                    const inPath = isPathNode(node.id);
+                    const isStart = node.id === pathData.start;
+                    const isEnd = node.id === pathData.end;
+                    const isSelected = activeNode && activeNode.id === node.id;
+                    const isMatch = searchTerm && node.id.toLowerCase().includes(searchTerm.toLowerCase());
+                    const isNeighbor = activeNode && sim.links.some(l => 
+                        (l.sourceObj.id === activeNode.id && l.targetObj.id === node.id) || 
+                        (l.sourceObj.id === node.id && l.targetObj.id === activeNode.id)
+                    );
+
+                    let alpha = 1;
+                    const degree = nodeDegrees.get(node.id) || 0;
+                    let radius = (3 + Math.min(degree * 0.25, 8)) * proj.scale * nodeScale;
+                    
+                    if (analysisSettings.showRichClub && degree <= 5) {
+                        alpha = 0.1;
+                        radius = 2 * proj.scale * nodeScale;
+                    }
+
+                    if (isSelected || isMatch || isStart || isEnd) radius = Math.max(radius, 8 * proj.scale * nodeScale);
+                    
+                    let color = colorMap.get(node.group) || '#6366f1';
+                    
+                    if (pathData.path.length > 0) {
+                       alpha = inPath ? 1 : 0.1;
+                       if (isStart) color = '#10b981'; 
+                       if (isEnd) color = '#ef4444'; 
+                    } else if (searchTerm) {
+                       alpha = isMatch ? 1 : 0.1;
+                    } else if (activeNode) {
+                       alpha = isSelected || isNeighbor ? 1 : 0.1;
+                    }
+
+                    const role = nodeRoles?.get(node.id);
+                    if (analysisSettings.showHubs && role === 'connector') {
+                        const r = radius * 1.5;
+                        const pts = `${proj.x},${proj.y - r} ${proj.x + r},${proj.y} ${proj.x},${proj.y + r} ${proj.x - r},${proj.y}`;
+                        svg += `<polygon points="${pts}" fill="#f59e0b" opacity="${alpha}" />\n`;
+                        labelsToDraw.push({ node, proj, isSelected, inPath, isMatch, isNeighbor, radius: r, role });
+                        return;
+                    }
+
+                    svg += `<circle cx="${proj.x}" cy="${proj.y}" r="${Math.max(0, radius)}" fill="${color}" opacity="${alpha}" />\n`;
+
+                    if (isSelected || isStart || isEnd || (analysisSettings.showHubs && role === 'provincial')) {
+                        const sc = role === 'provincial' ? "#000" : "#fff";
+                        const sw = (role === 'provincial' ? 1 : 2) * proj.scale;
+                        svg += `<circle cx="${proj.x}" cy="${proj.y}" r="${Math.max(0, radius)}" fill="none" stroke="${sc}" stroke-width="${sw}" opacity="${alpha}" />\n`;
+                        if (isSelected) {
+                            svg += `<circle cx="${proj.x}" cy="${proj.y}" r="${Math.max(0, radius)}" fill="none" stroke="#000" stroke-width="${1 * proj.scale}" opacity="${alpha}" />\n`;
+                        }
+                    }
+
+                    const showLabel = isSelected || isMatch || inPath || (proj.scale > 0.6 && (isNeighbor || (!activeNode && !searchTerm && pathData.path.length === 0 && !analysisSettings.showRichClub)));
+                    if (showLabel) {
+                        labelsToDraw.push({ node, proj, isSelected, inPath, isMatch, isNeighbor, radius, role });
+                    }
+                }
+            });
+
+            labelsToDraw.sort((a, b) => {
+                const scoreA = (a.isSelected ? 10000 : 0) + (a.isMatch ? 1000 : 0) + (a.inPath ? 100 : 0) + (a.isNeighbor ? 10 : 0) + a.proj.scale;
+                const scoreB = (b.isSelected ? 10000 : 0) + (b.isMatch ? 1000 : 0) + (b.inPath ? 100 : 0) + (b.isNeighbor ? 10 : 0) + b.proj.scale;
+                return scoreB - scoreA;
+            });
+
+            const drawnBoxes = [];
+
+            labelsToDraw.forEach(label => {
+                const fontSize = Math.max(12, 16 * label.proj.scale); 
+                ctx.font = `${label.isSelected || label.inPath ? "bold " : ""}${fontSize}px sans-serif`;
+                
+                const textWidth = ctx.measureText(label.node.id).width;
+                const textHeight = fontSize; 
+                const lx = label.proj.x;
+                const ly = label.proj.y - label.radius - 6; 
+                
+                const padding = 2;
+                const box = {
+                    l: lx - textWidth / 2 - padding,
+                    r: lx + textWidth / 2 + padding,
+                    t: ly - textHeight - padding,
+                    b: ly + padding
+                };
+
+                let collision = false;
+                if (!label.isSelected && !label.isMatch && !label.inPath && !label.isNeighbor) {
+                    for (const dBox of drawnBoxes) {
+                        if (!(box.r < dBox.l || box.l > dBox.r || box.b < dBox.t || box.t > dBox.b)) {
+                            collision = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!collision) {
+                    const fw = label.isSelected || label.inPath ? "bold" : "normal";
+                    const fill = label.isSelected || label.inPath ? "#000" : (is3D ? "#1e293b" : "#475569");
+                    
+                    svg += `<text x="${lx}" y="${ly}" font-family="sans-serif" font-weight="${fw}" font-size="${fontSize}px" fill="${fill}" text-anchor="middle" stroke="rgba(255, 255, 255, 0.85)" stroke-width="3" paint-order="stroke">${label.node.id}</text>\n`;
+                    drawnBoxes.push(box);
+                }
+            });
+
+            svg += `</svg>`;
+            
+            const blob = new Blob([svg], {type: 'image/svg+xml;charset=utf-8'});
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.download = `brain-viz-export.svg`;
+            link.href = url;
+            link.click();
+            URL.revokeObjectURL(url);
         }
       };
     }
-  }, [takeSnapshot]);
+  }, [takeSnapshot, dimensions, layout, colorMap, is3D, activeNode, searchTerm, pathData, analysisSettings, nodeRoles, nodeScale, nodeDegrees]);
 
   const recenterCamera = () => {
     simulationRef.current.camera = { x: 0, y: 0, zoom: 1, angleX: 0, angleY: 0 };
@@ -1123,6 +1350,7 @@ export default function App() {
   // --- VERSION CONTROL STATE ---
   const [versions, setVersions] = useState([]);
   const [activeVersionId, setActiveVersionId] = useState(''); 
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const fileInputRef = useRef(null);
 
   // Initialize with Fetching Local Public Files (AnyNet JSONs)
@@ -1603,7 +1831,24 @@ export default function App() {
                 </datalist>
              </div>
 
-             <button onClick={() => snapshotRef.current?.()} className="p-2 text-slate-500 hover:text-indigo-600" title="Take Snapshot"><Camera className="w-5 h-5" /></button>
+             <div className="relative" onMouseLeave={() => setExportMenuOpen(false)}>
+                <button 
+                  onClick={() => setExportMenuOpen(!exportMenuOpen)} 
+                  className="flex items-center p-2 text-slate-500 hover:text-indigo-600 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors" 
+                  title="Export Image"
+                >
+                  <Camera className="w-5 h-5" />
+                  <ChevronDown className="w-3 h-3 ml-1" />
+                </button>
+                {exportMenuOpen && (
+                  <div className="absolute right-0 mt-2 w-44 bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 z-50 overflow-hidden text-sm py-1">
+                     <button className="w-full text-left px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-medium" onClick={() => { snapshotRef.current?.('png'); setExportMenuOpen(false); }}>Download PNG</button>
+                     <button className="w-full text-left px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-medium" onClick={() => { snapshotRef.current?.('jpeg'); setExportMenuOpen(false); }}>Download JPEG</button>
+                     <button className="w-full text-left px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-medium" onClick={() => { snapshotRef.current?.('svg'); setExportMenuOpen(false); }}>Download SVG Vector</button>
+                     <button className="w-full text-left px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-medium" onClick={() => { snapshotRef.current?.('pdf'); setExportMenuOpen(false); }}>Print / PDF</button>
+                  </div>
+                )}
+             </div>
           </div>
         </div>
       </header>
