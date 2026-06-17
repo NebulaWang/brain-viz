@@ -1796,23 +1796,25 @@ export default function App() {
                   </button>
                   
                   {versionMenuOpen && (
-                    <div className="absolute left-0 mt-3 w-56 bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 z-50 overflow-hidden text-sm py-1">
-                       {versions.map(v => (
-                          <button 
-                            key={v.id} 
-                            onClick={() => {
-                              handleVersionChange(v.id);
-                              setVersionMenuOpen(false);
-                            }}
-                            className={`w-full text-left px-4 py-2 text-sm font-medium transition-colors ${
-                              activeVersionId === v.id 
-                                ? 'bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400' 
-                                : 'hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200'
-                            }`}
-                          >
-                            {v.name}
-                          </button>
-                       ))}
+                    <div className="absolute left-0 top-full pt-2 z-50">
+                      <div className="w-56 bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 overflow-hidden text-sm py-1">
+                         {versions.map(v => (
+                            <button 
+                              key={v.id} 
+                              onClick={() => {
+                                handleVersionChange(v.id);
+                                setVersionMenuOpen(false);
+                              }}
+                              className={`w-full text-left px-4 py-2 text-sm font-medium transition-colors ${
+                                activeVersionId === v.id 
+                                  ? 'bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400' 
+                                  : 'hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200'
+                              }`}
+                            >
+                              {v.name}
+                            </button>
+                         ))}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1869,11 +1871,13 @@ export default function App() {
                   <ChevronDown className="w-3 h-3 ml-1" />
                 </button>
                 {exportMenuOpen && (
-                  <div className="absolute right-0 mt-2 w-44 bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 z-50 overflow-hidden text-sm py-1">
-                     <button className="w-full text-left px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-medium" onClick={() => { snapshotRef.current?.('png'); setExportMenuOpen(false); }}>Download PNG</button>
-                     <button className="w-full text-left px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-medium" onClick={() => { snapshotRef.current?.('jpeg'); setExportMenuOpen(false); }}>Download JPEG</button>
-                     <button className="w-full text-left px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-medium" onClick={() => { snapshotRef.current?.('svg'); setExportMenuOpen(false); }}>Download SVG Vector</button>
-                     <button className="w-full text-left px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-medium" onClick={() => { snapshotRef.current?.('pdf'); setExportMenuOpen(false); }}>Print / PDF</button>
+                  <div className="absolute right-0 top-full pt-2 z-50">
+                    <div className="w-44 bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 overflow-hidden text-sm py-1">
+                       <button className="w-full text-left px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-medium" onClick={() => { snapshotRef.current?.('png'); setExportMenuOpen(false); }}>Download PNG</button>
+                       <button className="w-full text-left px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-medium" onClick={() => { snapshotRef.current?.('jpeg'); setExportMenuOpen(false); }}>Download JPEG</button>
+                       <button className="w-full text-left px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-medium" onClick={() => { snapshotRef.current?.('svg'); setExportMenuOpen(false); }}>Download SVG Vector</button>
+                       <button className="w-full text-left px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-medium" onClick={() => { snapshotRef.current?.('pdf'); setExportMenuOpen(false); }}>Print / PDF</button>
+                    </div>
                   </div>
                 )}
              </div>
