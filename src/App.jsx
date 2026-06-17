@@ -40,21 +40,78 @@ const Card = ({ children, className = "" }) => (
   </div>
 );
 
+const MetricBox = ({ label, value, tooltip, assessFn, colorClass = "text-indigo-600 dark:text-indigo-400" }) => {
+  const assessment = (value !== undefined && value !== null && !isNaN(value) && assessFn) ? assessFn(value) : null;
+  return (
+    <div className="bg-white dark:bg-slate-800/50 p-2.5 rounded-lg border border-slate-200 dark:border-slate-700 shadow-sm flex flex-col group relative h-full" title={tooltip}>
+       <div className="text-[9px] leading-tight font-bold text-slate-500 dark:text-slate-400 cursor-help mb-0.5">{label}</div>
+       <div className={`font-mono font-bold text-[13px] ${colorClass} mb-1.5`}>
+          {value !== undefined && value !== null && !isNaN(value) ? value.toFixed(3) : '-'}
+       </div>
+       <div className="mt-auto flex items-end">
+         {assessment && (
+             <span className={`inline-block text-[8px] px-1.5 py-0.5 rounded-sm font-bold ${assessment.color}`}>
+                 {assessment.text}
+             </span>
+         )}
+       </div>
+    </div>
+  );
+};
+
+// --- Metric Assessment Helpers ---
+const evalEfficiency = v => v > 0.3 ? {text: 'HIGH', color: 'bg-emerald-100 text-emerald-700'} : v > 0.1 ? {text: 'MOD', color: 'bg-amber-100 text-amber-700'} : {text: 'LOW', color: 'bg-rose-100 text-rose-700'};
+const evalClustering = v => v > 0.3 ? {text: 'HIGH', color: 'bg-emerald-100 text-emerald-700'} : {text: 'MOD', color: 'bg-amber-100 text-amber-700'};
+const evalDensity = v => v > 0.1 ? {text: 'DENSE', color: 'bg-indigo-100 text-indigo-700'} : {text: 'SPARSE', color: 'bg-slate-100 text-slate-700'};
+
+const evalCentralization = v => v > 0.4 ? {text: 'STRONG', color: 'bg-rose-100 text-rose-700'} : v > 0.15 ? {text: 'MODERATE', color: 'bg-amber-100 text-amber-700'} : {text: 'DISTRIBUTED', color: 'bg-emerald-100 text-emerald-700'};
+const evalAssortativity = v => v > 0.05 ? {text: 'RICH-CLUB', color: 'bg-purple-100 text-purple-700'} : v < -0.05 ? {text: 'DISASSORT', color: 'bg-rose-100 text-rose-700'} : {text: 'NEUTRAL', color: 'bg-slate-100 text-slate-700'};
+const evalAvgPC = v => v > 0.4 ? {text: 'INTEGRATED', color: 'bg-emerald-100 text-emerald-700'} : {text: 'SEGREGATED', color: 'bg-amber-100 text-amber-700'};
+
+const evalSmallWorld = v => v > 1.2 ? {text: 'STRONG', color: 'bg-emerald-100 text-emerald-700'} : v > 1.0 ? {text: 'WEAK', color: 'bg-amber-100 text-amber-700'} : {text: 'NONE', color: 'bg-slate-100 text-slate-700'};
+const evalPowerLaw = v => (v >= 2 && v <= 3.5) ? {text: 'YES', color: 'bg-emerald-100 text-emerald-700'} : {text: 'NO', color: 'bg-slate-100 text-slate-700'};
+const evalModularity = v => v > 0.3 ? {text: 'STRONG', color: 'bg-emerald-100 text-emerald-700'} : {text: 'WEAK', color: 'bg-amber-100 text-amber-700'};
+
 // --- Algorithms ---
 
 const calculateGraphMetrics = (nodes, links) => {
-  if (nodes.length === 0) return { efficiency: 0, clustering: 0, density: 0 };
+  if (nodes.length === 0) return { 
+    efficiency: 0, clustering: 0, density: 0, 
+    centralization: 0, assortativity: 0, modQ: 0, 
+    powerLaw: 0, smallWorld: 0, avgPC: 0 
+  };
+
+  const N = nodes.length;
+  const E = links.length;
 
   const adj = new Map();
-  nodes.forEach(n => adj.set(n.id, []));
+  const weights = new Map();
+  nodes.forEach(n => {
+      adj.set(n.id, []);
+      weights.set(n.id, 0); // node strength
+  });
+
+  let totalWeight = 0;
   links.forEach(l => {
-    if (adj.has(l.source) && adj.has(l.target)) {
-      adj.get(l.source).push(l.target);
-      adj.get(l.target).push(l.source);
+    const s = typeof l.source === 'object' ? l.source.id : l.source;
+    const t = typeof l.target === 'object' ? l.target.id : l.target;
+    const val = Math.abs(l.value); // Use absolute value for structural topology
+    
+    if (adj.has(s) && adj.has(t)) {
+      adj.get(s).push(t);
+      adj.get(t).push(s);
+      weights.set(s, weights.get(s) + val);
+      weights.set(t, weights.get(t) + val);
+      totalWeight += val;
     }
   });
 
+  // 1. Efficiency, Path Length, & Clustering
   let totalEfficiency = 0;
+  let totalPathLength = 0;
+  let reachablePairs = 0;
+
+  // Sample nodes to prevent UI freeze on huge networks
   const sampleNodes = nodes.length > 100 ? nodes.filter((_, i) => i % 2 === 0) : nodes; 
 
   sampleNodes.forEach(startNode => {
@@ -73,14 +130,17 @@ const calculateGraphMetrics = (nodes, links) => {
           distances.set(v, d + 1);
           queue.push(v);
           totalEfficiency += 1 / (d + 1);
+          totalPathLength += (d + 1);
+          reachablePairs++;
         }
       }
     }
   });
   
-  const n = sampleNodes.length;
-  const efficiency = totalEfficiency / (n * (nodes.length - 1) || 1); 
+  const avgPathLength = reachablePairs > 0 ? totalPathLength / reachablePairs : 0;
+  const efficiency = totalEfficiency / (sampleNodes.length * (N - 1) || 1); 
 
+  // Clustering
   let totalClustering = 0;
   nodes.forEach(node => {
     const neighbors = adj.get(node.id) || [];
@@ -97,12 +157,133 @@ const calculateGraphMetrics = (nodes, links) => {
     }
     totalClustering += (2 * triangles) / (k * (k - 1));
   });
-  const clustering = totalClustering / nodes.length;
+  const clustering = totalClustering / N;
 
-  const possibleLinks = (nodes.length * (nodes.length - 1)) / 2;
-  const density = links.length / (possibleLinks || 1);
+  const possibleLinks = (N * (N - 1)) / 2;
+  const density = E / (possibleLinks || 1);
 
-  return { efficiency, clustering, density };
+  // 2. Degree Centralization
+  const degrees = nodes.map(n => (adj.get(n.id) || []).length);
+  const maxDegree = Math.max(...degrees, 0);
+  const centralization = N > 2 ? degrees.reduce((acc, deg) => acc + (maxDegree - deg), 0) / ((N - 1) * (N - 2)) : 0;
+
+  // 3. Assortativity Coefficient
+  let sum_jk = 0, sum_j_plus_k = 0, sum_j2_plus_k2 = 0;
+  let validEdges = 0;
+  links.forEach(l => {
+      const s = typeof l.source === 'object' ? l.source.id : l.source;
+      const t = typeof l.target === 'object' ? l.target.id : l.target;
+      const dj = (adj.get(s) || []).length;
+      const dk = (adj.get(t) || []).length;
+      if (dj > 0 && dk > 0) {
+          sum_jk += dj * dk;
+          sum_j_plus_k += (dj + dk);
+          sum_j2_plus_k2 += (dj * dj + dk * dk);
+          validEdges++;
+      }
+  });
+  
+  let assortativity = 0;
+  if (validEdges > 0) {
+      const term1 = sum_jk;
+      const term2 = Math.pow(sum_j_plus_k, 2) / (4 * validEdges);
+      const term3 = 0.5 * sum_j2_plus_k2;
+      const num = term1 - term2;
+      const den = term3 - term2;
+      assortativity = den !== 0 ? num / den : 0;
+  }
+
+  // 4. Weighted Modularity (Q)
+  let modQ = 0;
+  if (totalWeight > 0) {
+      const communityInfo = new Map();
+      nodes.forEach(n => {
+          if (!communityInfo.has(n.group)) {
+              communityInfo.set(n.group, { innerWeight: 0, totalStrength: 0 });
+          }
+          communityInfo.get(n.group).totalStrength += weights.get(n.id);
+      });
+
+      links.forEach(l => {
+          const sObj = nodes.find(n => n.id === (typeof l.source === 'object' ? l.source.id : l.source));
+          const tObj = nodes.find(n => n.id === (typeof l.target === 'object' ? l.target.id : l.target));
+          if (sObj && tObj && sObj.group === tObj.group) {
+              communityInfo.get(sObj.group).innerWeight += Math.abs(l.value);
+          }
+      });
+
+      communityInfo.forEach(info => {
+          const e_c = info.innerWeight / totalWeight; // Edge fraction inside
+          const a_c = info.totalStrength / (2 * totalWeight); // Expected random edges
+          modQ += (e_c - Math.pow(a_c, 2));
+      });
+  }
+
+  // 5. Average Participation Coefficient
+  let totalPC = 0;
+  nodes.forEach(node => {
+    const degree = (adj.get(node.id) || []).length;
+    if (degree === 0) return;
+
+    const neighborLinks = links.filter(l => {
+        const sId = typeof l.source === 'object' ? l.source.id : l.source;
+        const tId = typeof l.target === 'object' ? l.target.id : l.target;
+        return sId === node.id || tId === node.id;
+    });
+    
+    const communityDegrees = new Map();
+    neighborLinks.forEach(l => {
+      const sId = typeof l.source === 'object' ? l.source.id : l.source;
+      const tId = typeof l.target === 'object' ? l.target.id : l.target;
+      const neighborId = sId === node.id ? tId : sId;
+      const neighbor = nodes.find(n => n.id === neighborId);
+      if (neighbor) {
+        communityDegrees.set(neighbor.group, (communityDegrees.get(neighbor.group) || 0) + 1);
+      }
+    });
+
+    let sumSq = 0;
+    communityDegrees.forEach(k_is => {
+      sumSq += Math.pow(k_is / degree, 2);
+    });
+    totalPC += (1 - sumSq);
+  });
+  const avgPC = N > 0 ? totalPC / N : 0;
+
+  // 6. Power-Law Exponent (Scale-Free via Maximum Likelihood Estimation)
+  const positiveDegrees = degrees.filter(d => d > 0);
+  let powerLaw = 0;
+  if (positiveDegrees.length > 2) {
+      const kmin = Math.min(...positiveDegrees);
+      if (Math.max(...positiveDegrees) > kmin) {
+          let sumLog = 0;
+          positiveDegrees.forEach(k => {
+              sumLog += Math.log(k / (kmin - 0.5));
+          });
+          if (sumLog > 0) {
+              powerLaw = 1 + positiveDegrees.length / sumLog;
+          }
+      }
+  }
+
+  // 7. Small-Worldness Index (Sigma)
+  let smallWorld = 0;
+  const K = (2 * E) / N; // Mean degree
+  if (K > 1 && avgPathLength > 0) {
+      const C_rand = K / N;
+      const L_rand = Math.log(N) / Math.log(K);
+      if (C_rand > 0 && L_rand > 0) {
+          const gamma = clustering / C_rand;
+          const lambda = avgPathLength / L_rand;
+          smallWorld = lambda > 0 ? gamma / lambda : 0;
+      }
+  }
+
+  return { 
+      efficiency, clustering, density, 
+      centralization, assortativity, modQ, 
+      powerLaw, smallWorld, avgPC 
+  };
 };
 
 const calculateHubRoles = (nodes, links, nodeDegrees) => {
@@ -1351,14 +1532,13 @@ export default function App() {
   const [versions, setVersions] = useState([]);
   const [activeVersionId, setActiveVersionId] = useState(''); 
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
-  const [versionMenuOpen, setVersionMenuOpen] = useState(false); // NEW STATE for custom dropdown
+  const [versionMenuOpen, setVersionMenuOpen] = useState(false);
   const fileInputRef = useRef(null);
 
   // Initialize with Fetching Local Public Files (AnyNet JSONs)
   useEffect(() => {
     const loadDefaultData = async () => {
       try {
-        // Attempt to fetch all 4 files directly from the /public folder
         const [restCorticalRes, restRes, stimCorticalRes, stimRes] = await Promise.all([
           fetch('brain_data_anynet_rest_cortical.json'),
           fetch('brain_data_anynet_rest.json'),
@@ -1375,14 +1555,10 @@ export default function App() {
         const stimCorticalData = await stimCorticalRes.json();
         const stimData = await stimRes.json();
 
-        // --- INTERCEPT AND STRICT FORMATTING ---
-        // 1. Catches unassigned nodes and forces them to Group -1 / "Community -1"
-        // 2. Forces all valid nodes to strictly use "Community {index}" starting from 0
         [restCorticalData.nodes, restData.nodes, stimCorticalData.nodes, stimData.nodes].forEach(nodes => {
            if (!nodes) return;
            nodes.forEach(n => {
-              n.group = parseInt(n.group, 10); // Ensure strict integer
-              
+              n.group = parseInt(n.group, 10); 
               if (n.community === 'Unknown' || n.group === -1 || (n.group === 0 && n.community === 'Unknown')) {
                  n.group = -1;
                  n.community = 'Community -1';
@@ -1391,7 +1567,6 @@ export default function App() {
               }
            });
         });
-        // -------------------------------------
 
         setVersions([
           { id: 'rest_cortical', name: 'AnyNet - Rest (Cortical Only)', data: restCorticalData },
@@ -1399,19 +1574,18 @@ export default function App() {
           { id: 'stim_cortical', name: 'AnyNet - Stim (Cortical Only)', data: stimCorticalData },
           { id: 'stim_full', name: 'AnyNet - Stim (Full)', data: stimData }
         ]);
-        setActiveVersionId('rest_cortical'); // Default view
+        setActiveVersionId('rest_cortical');
 
       } catch (err) {
         console.log("Local JSON files not found. Using fallback mock for preview window.");
-        // Fallback mock (472 regions) to ensure the preview window works
         const mockNodes = Array.from({ length: 472 }).map((_, i) => ({ 
             id: `Region-${i}`, group: i % 10, community: `Community ${i % 10}` 
         }));
-        const mockRestLinks = Array.from({ length: 472 }).map((_, i) => ({ 
-            source: `Region-${i}`, target: `Region-${(i + 3) % 472}`, value: Math.random() 
+        const mockRestLinks = Array.from({ length: 1500 }).map((_, i) => ({ 
+            source: `Region-${i % 472}`, target: `Region-${(i + 3) % 472}`, value: Math.random() 
         }));
-        const mockStimLinks = Array.from({ length: 472 }).map((_, i) => ({ 
-            source: `Region-${i}`, target: `Region-${(i + 5) % 472}`, value: Math.random() * 1.5 
+        const mockStimLinks = Array.from({ length: 1500 }).map((_, i) => ({ 
+            source: `Region-${i % 472}`, target: `Region-${(i + 5) % 472}`, value: Math.random() * 1.5 
         }));
 
         setVersions([
@@ -1427,7 +1601,7 @@ export default function App() {
     loadDefaultData();
   }, []);
 
-  const [internalThreshold, setInternalThreshold] = useState(0.05); // Lowered defaults for AnyNet
+  const [internalThreshold, setInternalThreshold] = useState(0.05); 
   const [crossThreshold, setCrossThreshold] = useState(0.05);
   const [hideBelowThreshold, setHideBelowThreshold] = useState(true); 
   const [nodeScale, setNodeScale] = useState(1.0); 
@@ -1436,12 +1610,11 @@ export default function App() {
   const [showMatrix, setShowMatrix] = useState(false);
   const [selectedNode, setSelectedNode] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const [hiddenGroups, setHiddenGroups] = useState(new Set([-1])); // Hidden by default
+  const [hiddenGroups, setHiddenGroups] = useState(new Set([-1])); 
   
   const [mode, setMode] = useState('explore'); 
   const [lesionedNodes, setLesionedNodes] = useState(new Set());
   
-  // Delta Settings
   const [deltaMode, setDeltaMode] = useState(false);
   const [deltaBaseId, setDeltaBaseId] = useState('rest_cortical'); 
   const [deltaTargetId, setDeltaTargetId] = useState('stim_cortical'); 
@@ -1457,7 +1630,6 @@ export default function App() {
 
   const snapshotRef = useRef(null);
 
-  // --- DYNAMIC GRAPH DATA COMPUTATION ---
   const graphData = useMemo(() => {
     if (deltaMode) {
         const baseData = versions.find(v => v.id === deltaBaseId)?.data;
@@ -1521,7 +1693,6 @@ export default function App() {
     if (lesionedNodes.size > 0) baseNodes = baseNodes.filter(n => !lesionedNodes.has(n.id));
     if (hiddenGroups.size > 0) baseNodes = baseNodes.filter(n => !hiddenGroups.has(n.group));
     
-    // Strict filtering: Ensures nodes are only visible if they have active links connecting to OTHER visible nodes
     if (hideBelowThreshold) {
         const validNodeIds = new Set(baseNodes.map(n => n.id));
         const connected = new Set();
@@ -1550,7 +1721,6 @@ export default function App() {
   const hubCommunity = useMemo(() => {
     if (visibleNodes.length === 0 || activeLinks.length === 0) return null;
 
-    // Map for ultra-fast O(1) lookups
     const nodeGroupMap = new Map(visibleNodes.map(n => [n.id, n.group]));
     
     const globalWeights = new Map();
@@ -1564,15 +1734,12 @@ export default function App() {
       const sGroup = nodeGroupMap.get(s);
       const tGroup = nodeGroupMap.get(t);
 
-      // Only count edges where both ends are currently visible/selected
       if (sGroup !== undefined && tGroup !== undefined) {
-          const val = Math.abs(link.value); // Use absolute value for Delta modes
+          const val = Math.abs(link.value); 
           
-          // 1. Overall / Global Strength
           globalWeights.set(sGroup, (globalWeights.get(sGroup) || 0) + val);
           globalWeights.set(tGroup, (globalWeights.get(tGroup) || 0) + val);
 
-          // 2. Cross vs Inner Strength
           if (sGroup !== tGroup) {
               crossWeights.set(sGroup, (crossWeights.get(sGroup) || 0) + val);
               crossWeights.set(tGroup, (crossWeights.get(tGroup) || 0) + val);
@@ -1582,7 +1749,6 @@ export default function App() {
       }
     });
 
-    // Helper to find the maximum weight in a specific category map
     const getWinner = (weightMap) => {
         let maxWeight = -1;
         let hubId = null;
@@ -1680,11 +1846,8 @@ export default function App() {
       try {
         const json = JSON.parse(e.target.result);
         if (json.nodes && Array.isArray(json.nodes)) {
-          
-          // --- INTERCEPT AND STRICT FORMATTING ---
           json.nodes.forEach(n => {
-              n.group = parseInt(n.group, 10); // Ensure strict integer
-              
+              n.group = parseInt(n.group, 10); 
               if (n.community === 'Unknown' || n.group === -1 || (n.group === 0 && n.community === 'Unknown')) {
                  n.group = -1;
                  n.community = 'Community -1';
@@ -1692,7 +1855,6 @@ export default function App() {
                  n.community = `Community ${n.group}`;
               }
           });
-          // -------------------------------------
 
           const newVersionId = `v${Date.now()}`;
           const newVersion = {
@@ -1708,13 +1870,12 @@ export default function App() {
           let initialThreshold = 0;
           if (json.links && json.links.length > 2000) {
              const values = json.links.map(l => l.value).sort((a,b) => b-a);
-             // AnyNet specific scaling - usually density is higher
              if (values.length > 1000) initialThreshold = values[1000];
           }
           setInternalThreshold(initialThreshold);
           setCrossThreshold(initialThreshold);
           setSelectedNode(null);
-          setHiddenGroups(new Set([-1])); // Hidden by default for new files
+          setHiddenGroups(new Set([-1])); 
         } else { alert("Invalid JSON format."); }
       } catch (err) { alert("Failed to parse JSON file."); }
       if(fileInputRef.current) fileInputRef.current.value = "";
@@ -1724,44 +1885,33 @@ export default function App() {
 
   const analysisSettings = { showHubs, showRichClub, deltaMode, lesionMode: mode === 'analysis' };
 
-  // Smart State Switcher: Preserves viewing of specific brain regions across different community assignments
   const handleVersionChange = (newVersionId) => {
     if (hiddenGroups.size > 0 && graphData.nodes) {
-      // 1. Get the actual IDs of the brain regions currently visible
       const currentVisibleNodeIds = new Set(
         graphData.nodes
           .filter(n => !hiddenGroups.has(n.group))
           .map(n => n.id)
       );
 
-      // 2. Find the nodes in the state we are switching to
       const newVersionData = versions.find(v => v.id === newVersionId)?.data;
       if (newVersionData && newVersionData.nodes) {
         const newVisibleGroups = new Set();
-        
-        // 3. Find which groups in the new state contain our previously visible regions
         newVersionData.nodes.forEach(n => {
           if (currentVisibleNodeIds.has(n.id)) {
             newVisibleGroups.add(n.group);
           }
         });
 
-        // 4. Update the hidden list to isolate these newly identified groups
         const allNewGroups = new Set(newVersionData.nodes.map(n => n.group));
         const newHidden = new Set([...allNewGroups].filter(g => !newVisibleGroups.has(g)));
-        
-        // Automatically hide Community -1 on state transition
         newHidden.add(-1);
-        
         setHiddenGroups(newHidden);
       }
     }
-    
     setActiveVersionId(newVersionId);
     setDeltaMode(false);
   };
 
-  // Helper to get active version name
   const activeVersionName = versions.find(v => v.id === activeVersionId)?.name || 'Select Version';
 
   return (
@@ -1785,7 +1935,7 @@ export default function App() {
              <div className="flex items-center bg-slate-100 dark:bg-slate-700 p-1.5 rounded-lg border border-slate-200 dark:border-slate-600 shadow-sm relative">
                 <GitCommit className="w-4 h-4 text-slate-400 mr-2 ml-1" />
                 
-                {/* CUSTOM DROPDOWN INSTEAD OF NATIVE SELECT */}
+                {/* CUSTOM DROPDOWN */}
                 <div className="relative" onMouseLeave={() => setVersionMenuOpen(false)}>
                   <button 
                     onClick={() => setVersionMenuOpen(!versionMenuOpen)}
@@ -1977,11 +2127,11 @@ export default function App() {
 
                {/* 4. Scorecard */}
                <div>
-                 <div className="text-xs font-bold text-slate-500 mb-2">Network Scorecard</div>
+                 <div className="text-xs font-bold text-slate-500 mb-3">Network Scorecard</div>
                  
-                 {/* New Hub Community Display */}
+                 {/* Hub Community Display */}
                  {hubCommunity && (
-                    <div className="bg-white dark:bg-slate-900 p-3 rounded-lg border border-indigo-100 dark:border-indigo-900/50 mb-3 shadow-sm flex flex-col gap-2.5">
+                    <div className="bg-white dark:bg-slate-900 p-3 rounded-lg border border-indigo-100 dark:border-indigo-900/50 mb-4 shadow-sm flex flex-col gap-2.5">
                        <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider border-b border-slate-100 dark:border-slate-800 pb-1.5">Dominant Hub Communities</div>
                        
                        {/* Global Hub */}
@@ -2040,20 +2190,33 @@ export default function App() {
                     </div>
                  )}
 
-                 <div className="grid grid-cols-2 gap-2">
-                    <div className="bg-white p-2 rounded border border-slate-200">
-                       <div className="text-[10px] text-slate-400">Global Efficiency</div>
-                       <div className="font-mono text-indigo-600 text-sm">{metrics?.efficiency.toFixed(3) || '-'}</div>
+                 <div className="space-y-4">
+                    <div>
+                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 pl-1">Core Topology</div>
+                        <div className="grid grid-cols-3 gap-2">
+                            <MetricBox label="Efficiency" value={metrics?.efficiency} tooltip="Measures how efficiently information is exchanged. Higher = better global integration." assessFn={evalEfficiency} colorClass="text-blue-600 dark:text-blue-400" />
+                            <MetricBox label="Clustering" value={metrics?.clustering} tooltip="Measures local neighborhood density. Higher = stronger local cliques." assessFn={evalClustering} colorClass="text-blue-600 dark:text-blue-400" />
+                            <MetricBox label="Density" value={metrics?.density} tooltip="Fraction of actual edges vs possible edges." assessFn={evalDensity} colorClass="text-blue-600 dark:text-blue-400" />
+                        </div>
                     </div>
-                    <div className="bg-white p-2 rounded border border-slate-200">
-                       <div className="text-[10px] text-slate-400">Clustering</div>
-                       <div className="font-mono text-indigo-600 text-sm">{metrics?.clustering.toFixed(3) || '-'}</div>
+                    <div>
+                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 pl-1">Hubs & Centrality</div>
+                        <div className="grid grid-cols-3 gap-2">
+                            <MetricBox label="Centralization" value={metrics?.centralization} tooltip="1.0 = Star network. 0.0 = Uniform. Measures if the network relies on a few central hubs." assessFn={evalCentralization} colorClass="text-emerald-600 dark:text-emerald-400" />
+                            <MetricBox label="Assortativity" value={metrics?.assortativity} tooltip="Positive = Hubs connect to Hubs (Rich-Club). Negative = Hubs connect to non-hubs." assessFn={evalAssortativity} colorClass="text-emerald-600 dark:text-emerald-400" />
+                            <MetricBox label="Avg Part. Coeff" value={metrics?.avgPC} tooltip="High = Nodes connect evenly across different communities. Low = Nodes connect only internally." assessFn={evalAvgPC} colorClass="text-emerald-600 dark:text-emerald-400" />
+                        </div>
                     </div>
-                    <div className="bg-white p-2 rounded border border-slate-200">
-                       <div className="text-[10px] text-slate-400">Density</div>
-                       <div className="font-mono text-indigo-600 text-sm">{metrics?.density.toFixed(3) || '-'}</div>
+                    <div>
+                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 pl-1">Network Architecture</div>
+                        <div className="grid grid-cols-3 gap-2">
+                            <MetricBox label="Small-World (σ)" value={metrics?.smallWorld} tooltip="> 1.0 indicates a Small World network (high local clustering but short global paths)." assessFn={evalSmallWorld} colorClass="text-purple-600 dark:text-purple-400" />
+                            <MetricBox label="Scale-Free (γ)" value={metrics?.powerLaw} tooltip="Between 2 and 3 indicates a scale-free network governed by strict power-law hubs." assessFn={evalPowerLaw} colorClass="text-purple-600 dark:text-purple-400" />
+                            <MetricBox label="Modularity (Q)" value={metrics?.modQ} tooltip="> 0.3 indicates strong community structures. (Aligned directly with Python Resolution=1.0)." assessFn={evalModularity} colorClass="text-purple-600 dark:text-purple-400" />
+                        </div>
                     </div>
                  </div>
+
                </div>
             </Card>
           )}
