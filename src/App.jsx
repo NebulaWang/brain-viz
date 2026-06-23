@@ -1059,7 +1059,7 @@ const CanvasGraph = ({
           s.fy += (dy/dist) * force;
           s.fz += is3D ? (dz/dist) * force : 0;
 
-          t.fx -= (dx/dist) * force;
+          t.fx -= (dx/dist) * factor;
           t.fy -= (dy/dist) * force;
           t.fz -= is3D ? (dz/dist) * force : 0;
         });
@@ -1539,6 +1539,8 @@ export default function App() {
   useEffect(() => {
     const loadDefaultData = async () => {
       try {
+        // BUG FIX for GitHub Pages Deployment: 
+        // Removed leading '/' to make paths relative to the repo sub-directory.
         const [restCorticalRes, restRes, stimCorticalRes, stimRes] = await Promise.all([
           fetch('brain_data_anynet_rest_cortical.json'),
           fetch('brain_data_anynet_rest.json'),
@@ -1581,11 +1583,11 @@ export default function App() {
         const mockNodes = Array.from({ length: 472 }).map((_, i) => ({ 
             id: `Region-${i}`, group: i % 10, community: `Community ${i % 10}` 
         }));
-        const mockRestLinks = Array.from({ length: 1500 }).map((_, i) => ({ 
-            source: `Region-${i % 472}`, target: `Region-${(i + 3) % 472}`, value: Math.random() 
+        const mockRestLinks = Array.from({ length: 472 }).map((_, i) => ({ 
+            source: `Region-${i}`, target: `Region-${(i + 3) % 472}`, value: Math.random() 
         }));
-        const mockStimLinks = Array.from({ length: 1500 }).map((_, i) => ({ 
-            source: `Region-${i % 472}`, target: `Region-${(i + 5) % 472}`, value: Math.random() * 1.5 
+        const mockStimLinks = Array.from({ length: 472 }).map((_, i) => ({ 
+            source: `Region-${i}`, target: `Region-${(i + 5) % 472}`, value: Math.random() * 1.5 
         }));
 
         setVersions([
@@ -1671,13 +1673,20 @@ export default function App() {
   const activeLinks = useMemo(() => {
       const nodeGroupMap = new Map(graphData.nodes.map(n => [n.id, n.group]));
       return graphData.links.filter(l => {
-          const val = deltaMode ? Math.abs(l.value) : l.value;
+          // --- BUG FIX: Completely discard edges involving Lesioned or Hidden Nodes ---
+          if (lesionedNodes.has(l.source) || lesionedNodes.has(l.target)) return false;
+
           const sGroup = nodeGroupMap.get(l.source);
           const tGroup = nodeGroupMap.get(l.target);
+          
+          if (hiddenGroups.has(sGroup) || hiddenGroups.has(tGroup)) return false;
+          // -------------------------------------------------------------------------
+
+          const val = deltaMode ? Math.abs(l.value) : l.value;
           if (sGroup === tGroup) return val >= internalThreshold;
           return val >= crossThreshold;
       });
-  }, [graphData.links, internalThreshold, crossThreshold, deltaMode, graphData.nodes]);
+  }, [graphData.links, internalThreshold, crossThreshold, deltaMode, graphData.nodes, hiddenGroups, lesionedNodes]);
 
   const nodeDegrees = useMemo(() => {
     const degrees = new Map();
