@@ -1541,23 +1541,27 @@ export default function App() {
       try {
         // BUG FIX for GitHub Pages Deployment: 
         // Removed leading '/' to make paths relative to the repo sub-directory.
-        const [restCorticalRes, restRes, stimCorticalRes, stimRes] = await Promise.all([
+        const [restCorticalRes, restSubcorticalRes, restRes, stimCorticalRes, stimSubcorticalRes, stimRes] = await Promise.all([
           fetch('brain_data_anynet_rest_cortical.json'),
+          fetch('brain_data_anynet_rest_subcortical.json'),
           fetch('brain_data_anynet_rest.json'),
           fetch('brain_data_anynet_stim_cortical.json'),
+          fetch('brain_data_anynet_stim_subcortical.json'),
           fetch('brain_data_anynet_stim.json')
         ]);
         
-        if (!restCorticalRes.ok || !restRes.ok || !stimCorticalRes.ok || !stimRes.ok) {
+        if (!restCorticalRes.ok || !restSubcorticalRes.ok || !restRes.ok || !stimCorticalRes.ok || !stimSubcorticalRes.ok || !stimRes.ok) {
            throw new Error("One or more local files not found");
         }
         
         const restCorticalData = await restCorticalRes.json();
+        const restSubcorticalData = await restSubcorticalRes.json();
         const restData = await restRes.json();
         const stimCorticalData = await stimCorticalRes.json();
+        const stimSubcorticalData = await stimSubcorticalRes.json();
         const stimData = await stimRes.json();
 
-        [restCorticalData.nodes, restData.nodes, stimCorticalData.nodes, stimData.nodes].forEach(nodes => {
+        [restCorticalData.nodes, restSubcorticalData.nodes, restData.nodes, stimCorticalData.nodes, stimSubcorticalData.nodes, stimData.nodes].forEach(nodes => {
            if (!nodes) return;
            nodes.forEach(n => {
               n.group = parseInt(n.group, 10); 
@@ -1572,8 +1576,10 @@ export default function App() {
 
         setVersions([
           { id: 'rest_cortical', name: 'AnyNet - Rest (Cortical Only)', data: restCorticalData },
+          { id: 'rest_subcortical', name: 'AnyNet - Rest (Subcortical Only)', data: restSubcorticalData },
           { id: 'rest_full', name: 'AnyNet - Rest (Full)', data: restData },
           { id: 'stim_cortical', name: 'AnyNet - Stim (Cortical Only)', data: stimCorticalData },
+          { id: 'stim_subcortical', name: 'AnyNet - Stim (Subcortical Only)', data: stimSubcorticalData },
           { id: 'stim_full', name: 'AnyNet - Stim (Full)', data: stimData }
         ]);
         setActiveVersionId('rest_cortical');
@@ -1592,8 +1598,10 @@ export default function App() {
 
         setVersions([
           { id: 'rest_cortical', name: 'AnyNet - Rest (Cortical Mock)', data: { nodes: mockNodes, links: mockRestLinks } },
+          { id: 'rest_subcortical', name: 'AnyNet - Rest (Subcortical Mock)', data: { nodes: mockNodes, links: mockRestLinks } },
           { id: 'rest_full', name: 'AnyNet - Rest (Full Mock)', data: { nodes: mockNodes, links: mockRestLinks } },
           { id: 'stim_cortical', name: 'AnyNet - Stim (Cortical Mock)', data: { nodes: mockNodes, links: mockStimLinks } },
+          { id: 'stim_subcortical', name: 'AnyNet - Stim (Subcortical Mock)', data: { nodes: mockNodes, links: mockStimLinks } },
           { id: 'stim_full', name: 'AnyNet - Stim (Full Mock)', data: { nodes: mockNodes, links: mockStimLinks } }
         ]);
         setActiveVersionId('rest_cortical');
